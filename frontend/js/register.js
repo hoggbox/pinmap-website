@@ -27,7 +27,7 @@ async function register() {
       body: formData,
     });
     const data = await response.json();
-    if (response.ok) {
+    if (response.ok || response.status === 201) { // Accept 201 as success too
       const registerForm = document.getElementById('register-form');
       const successModal = document.getElementById('success-modal');
       
@@ -37,7 +37,7 @@ async function register() {
       
       setTimeout(() => {
         window.location.href = 'index.html';
-      }, 2000); // Redirect to login page after 2 seconds
+      }, 2000);
     } else {
       alert(`Registration failed: ${data.message || 'Unknown error'}`);
     }
@@ -62,7 +62,6 @@ function previewProfilePicture(event) {
   }
 }
 
-// Event listeners
 const profilePictureInput = document.getElementById('profile-picture');
 if (profilePictureInput) {
   profilePictureInput.addEventListener('change', previewProfilePicture);
