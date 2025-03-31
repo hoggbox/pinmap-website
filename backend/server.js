@@ -48,6 +48,7 @@ const Location = mongoose.model('Location', locationSchema);
 // WebSocket Server
 const server = app.listen(process.env.PORT || 5000, () => console.log(`Server running on port ${process.env.PORT || 5000}`));
 const wss = new WebSocket.Server({ server });
+app.wss = wss; // Attach wss to app for use in routes
 const adminEmail = 'imhoggbox@gmail.com';
 const onlineUsers = new Map();
 
@@ -127,10 +128,17 @@ wss.on('connection', (ws, req) => {
         const { senderId, recipientId, content } = data;
         const messageDoc = new Message({ senderId, recipientId, content });
         await messageDoc.save();
-        const recipientWs = Array.from(onlineUsers.values()).find(u => u.ws.userId === recipientId)?.ws;
-        if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
-          recipientWs.send(JSON.stringify({ type: 'privateMessage', senderId, recipientId, content }));
-        }
+        const populatedMessage = await Message.findById(messageDoc._id)
+          .populate('senderId', 'username email')
+          .populate('recipientId', 'username email');
+        wss.clients.forEach(client => {
+          if (client.readyState === WebSocket.OPEN && (client.userId === recipientId || client.userId === senderId)) {
+            client.send(JSON.stringify({
+              type: 'privateMessage',
+              message: populatedMessage
+            }));
+          }
+        });
       }
     } catch (err) {
       console.error('WebSocket message error:', err);
@@ -159,6 +167,24 @@ wss.on('connection', (ws, req) => {
       }
     }
   });
+});
+
+// Set WebSocket email (for frontend compatibility)
+app.get('/set-ws-email', (req, res) => {
+  const { email, userId } = req.query;
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN && (!client.userId || !client.email)) {
+      client.userId = userId;
+      client.email = email;
+      client.send(JSON.stringify({ type: 'authSuccess' }));
+    }
+  });
+  res.send('WebSocket email set');
+});
+
+// Weather endpoint (stubbed as not modified)
+app.get('/weather', (req, res) => {
+  res.json({ alerts: [] }); // Placeholder as original not provided
 });
 
 // Admin Analytics Endpoint
