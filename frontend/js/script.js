@@ -1,4 +1,3 @@
-let map;
 let token;
 let currentLatLng;
 let userId;
@@ -17,10 +16,6 @@ let currentProfileUserId;
 let ws;
 let username;
 
-// Replace this with your Render backend URL after deployment (e.g., 'https://your-app-name.onrender.com')
-const BASE_URL = window.location.origin; // Uses the current domain by default; adjust if backend is separate
-const WS_URL = BASE_URL.replace('http', 'ws'); // Converts http/https to ws/wss for WebSocket
-
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (deg) => deg * Math.PI / 180;
@@ -32,7 +27,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-function initMap() {
+function initMap() {  
   map = new google.maps.Map(document.getElementById('map'), {
     zoom: 12,
     styles: [
@@ -62,11 +57,24 @@ function initMap() {
   } else {
     showLogin();
   }
+
+  // Profile picture preview for edit profile
+  document.getElementById('profile-picture').addEventListener('change', (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        document.getElementById('profile-picture-preview').src = e.target.result;
+        document.getElementById('profile-picture-preview').style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    }
+  });
 }
 
 async function fetchProfileForUsername() {
   try {
-    const response = await fetch(`${BASE_URL}/auth/profile`, {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/profile', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
@@ -103,11 +111,11 @@ function showMap() {
 }
 
 function setupWebSocket() {
-  ws = new WebSocket(WS_URL);
+  ws = new WebSocket('wss://pinmap-website.onrender.com');
   ws.onopen = () => {
     console.log('WebSocket connected');
     const payload = JSON.parse(atob(token.split('.')[1]));
-    fetch(`${BASE_URL}/set-ws-email?email=${encodeURIComponent(payload.email)}&userId=${encodeURIComponent(userId)}`);
+    fetch(`https://pinmap-website.onrender.com/set-ws-email?email=${encodeURIComponent(payload.email)}&userId=${encodeURIComponent(userId)}`);
   };
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -131,9 +139,22 @@ function setupWebSocket() {
       addChatMessage(data);
     } else if (data.type === 'privateMessage') {
       checkNewMessages();
+    } else if (data.type === 'newPin') {
+      fetchPins(); // Refresh pins instantly
+    } else if (data.type === 'newComment') {
+      const pinId = data.pinId;
+      if (document.getElementById(`comment-modal-${pinId}`)) {
+        showComments(pinId); // Refresh comments if modal is open
+      }
+      fetchPins(); // Update pin comment count
     }
   };
-  ws.onclose = () => console.log('WebSocket disconnected');
+  ws.onclose = () => {
+    console.log('WebSocket disconnected');
+  };
+  ws.onerror = (err) => {
+    console.error('WebSocket error:', err);
+  };
 }
 
 function addChatMessage(data) {
@@ -141,24 +162,21 @@ function addChatMessage(data) {
   const messageDiv = document.createElement('div');
   messageDiv.className = 'chat-message';
   messageDiv.innerHTML = `
-    <span class="username">${data.username || 'Unknown'}</span>:
+    <span class="username">${data.username || data.userId || 'Unknown'}</span>:
     ${data.message}
     <span class="timestamp">${new Date(data.timestamp).toLocaleTimeString()}</span>
   `;
   chatMessages.appendChild(messageDiv);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  console.log('Chat message added:', data); // Debug
 }
 
 function sendChatMessage() {
   const messageInput = document.getElementById('chat-input');
   const message = messageInput.value.trim();
   if (!message) return;
-  if (!username) {
-    if (confirm('You need a username to chat. Set one in your profile?')) editProfile();
-    return;
-  }
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'chat', userId, username, message }));
+    ws.send(JSON.stringify({ type: 'chat', userId, username: username || 'Anonymous', message }));
     messageInput.value = '';
   } else {
     alert('Chat connection not available.');
@@ -215,7 +233,7 @@ function startLocationTracking() {
             longitude: userLocation.lng
           }));
         }
-        fetch(`${BASE_URL}/auth/location`, {
+        fetch('https://pinmap-website.onrender.com/auth/location', {
           method: 'PUT',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ latitude: userLocation.lat, longitude: userLocation.lng })
@@ -300,52 +318,37 @@ async function login() {
   }
 
   try {
-    console.log('Attempting login with:', { email, password, stayLoggedIn });
-    const response = await fetch(`${BASE_URL}/auth/login`, {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, stayLoggedIn }),
-    }).catch(err => {
-      console.error('Fetch error:', err);
-      throw new Error(`Network error: ${err.message}. Is the server running?`);
     });
-
-    console.log('Login response:', response);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Login failed with status:', response.status, errorText);
-      alert(`Login failed: ${errorText || 'Invalid credentials'} (Status: ${response.status})`);
+      alert(`Login failed: ${errorText || 'Invalid credentials'}`);
       return;
     }
 
     const data = await response.json();
-    console.log('Login data:', data);
-
     if (data.token) {
       token = data.token;
       localStorage.setItem('token', token);
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        userId = payload.id;
-        isAdmin = payload.email === 'imhoggbox@gmail.com';
-        console.log('User logged in:', { userId, isAdmin });
-        fetchProfileForUsername();
-        showMap();
-        startMap();
-        fetchWeatherAlerts();
-        setupWebSocket();
-        checkNewMessages();
-      } catch (err) {
-        console.error('Token parsing error:', err);
-        alert('Invalid token received. Please try again.');
-      }
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      userId = payload.id;
+      isAdmin = payload.email === 'imhoggbox@gmail.com';
+      fetchProfileForUsername();
+      showMap();
+      startMap();
+      fetchWeatherAlerts();
+      setupWebSocket();
+      checkNewMessages();
     } else {
       alert(`Login failed: ${data.message || 'No token received'}`);
     }
   } catch (err) {
     console.error('Login error:', err);
-    alert(err.message);
+    alert('Error during login. Please try again.');
   }
 }
 
@@ -372,7 +375,7 @@ function signOut() {
 
 async function addPin() {
   if (!currentLatLng) return alert('Click the map to select a location!');
-  const response = await fetch(`${BASE_URL}/pins`, {
+  const response = await fetch('https://pinmap-website.onrender.com/pins', {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (response.status === 401) {
@@ -388,8 +391,8 @@ async function addPin() {
   }
 
   const pinType = document.getElementById('pin-type').value;
-  const descriptionInput = document.getElementById('description').value;
-  const description = pinType || descriptionInput;
+  const descriptionInput = document.getElementById('description').value.trim();
+  const description = descriptionInput || pinType; // Prioritize custom description
   const mediaFile = document.getElementById('media-upload').files[0];
   const formData = new FormData();
   formData.append('latitude', currentLatLng.lat);
@@ -397,12 +400,15 @@ async function addPin() {
   formData.append('description', description);
   if (mediaFile) formData.append('media', mediaFile);
 
-  const postResponse = await fetch(`${BASE_URL}/pins`, {
+  const postResponse = await fetch('https://pinmap-website.onrender.com/pins', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}` },
     body: formData,
   });
   if (postResponse.ok) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'newPin', pin: { latitude: currentLatLng.lat, longitude: currentLatLng.lng, description } }));
+    }
     fetchPins();
     document.getElementById('pin-type').value = '';
     document.getElementById('description').value = '';
@@ -418,7 +424,7 @@ async function addPin() {
 
 async function extendPin(pinId) {
   try {
-    const response = await fetch(`${BASE_URL}/pins/extend/${pinId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/extend/${pinId}`, {
       method: 'PUT',
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -436,7 +442,7 @@ async function extendPin(pinId) {
 
 async function verifyPin(pinId) {
   try {
-    const response = await fetch(`${BASE_URL}/pins/verify/${pinId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/verify/${pinId}`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -455,7 +461,7 @@ async function verifyPin(pinId) {
 
 async function showComments(pinId) {
   try {
-    const response = await fetch(`${BASE_URL}/pins/comments/${pinId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/comments/${pinId}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
@@ -517,14 +523,17 @@ async function addComment(pinId, parentCommentId = null) {
 
   if (!finalContent) return alert('Comment cannot be empty');
   try {
-    const response = await fetch(`${BASE_URL}/pins/comment/${pinId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/comment/${pinId}`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: finalContent, parentCommentId })
     });
     if (response.ok) {
-      closeComments(); // Close modal after posting
-      showComments(pinId); // Reopen with updated comments
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'newComment', pinId }));
+      }
+      closeComments();
+      showComments(pinId);
     } else {
       alert(await response.text());
     }
@@ -549,7 +558,7 @@ function showReplyInput(pinId, parentCommentId) {
 
 async function likeComment(commentId) {
   try {
-    const response = await fetch(`${BASE_URL}/pins/comment/${commentId}/like`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/comment/${commentId}/like`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -568,7 +577,7 @@ async function likeComment(commentId) {
 
 async function dislikeComment(commentId) {
   try {
-    const response = await fetch(`${BASE_URL}/pins/comment/${commentId}/dislike`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/comment/${commentId}/dislike`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -592,7 +601,7 @@ function closeComments() {
 
 async function removePin(pinId) {
   try {
-    const response = await fetch(`${BASE_URL}/pins/${pinId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/${pinId}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` },
     });
@@ -616,7 +625,7 @@ async function removePin(pinId) {
 
 async function voteToRemove(pinId) {
   try {
-    const response = await fetch(`${BASE_URL}/pins/vote/${pinId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/pins/vote/${pinId}`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -689,10 +698,10 @@ function viewMedia(mediaPath) {
   mediaImage.style.display = 'none';
   mediaVideo.style.display = 'none';
   if (mediaPath.endsWith('.mp4') || mediaPath.endsWith('.webm')) {
-    mediaVideo.src = `${BASE_URL}${mediaPath}`;
+    mediaVideo.src = `https://pinmap-website.onrender.com${mediaPath}`;
     mediaVideo.style.display = 'block';
   } else {
-    mediaImage.src = `${BASE_URL}${mediaPath}`;
+    mediaImage.src = `https://pinmap-website.onrender.com${mediaPath}`;
     mediaImage.style.display = 'block';
   }
   document.getElementById('map-container').style.display = 'none';
@@ -710,7 +719,7 @@ function closeMediaView() {
 
 async function fetchPins() {
   try {
-    const response = await fetch(`${BASE_URL}/pins`, {
+    const response = await fetch('https://pinmap-website.onrender.com/pins', {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (response.status === 401) {
@@ -752,12 +761,9 @@ async function fetchPins() {
     filteredPins.forEach(pin => {
       if (!markers[pin._id]) {
         const desc = pin.description.toLowerCase();
-        const icon = desc === 'cop' || desc === 'police' ? { url: 'https://img.icons8.com/?size=100&id=fHTZqkybfaA7&format=png&color=000000', scaledSize: new google.maps.Size(32, 32) }
-                  : desc === 'gun' || desc === 'shooting' || desc === 'driveby' || desc === 'shootout' ? { url: 'https://img.icons8.com/?size=100&id=10431&format=png&color=000000', scaledSize: new google.maps.Size(32, 32) }
-                  : desc === 'fire' ? { url: 'https://img PMPions8.com/?size=100&id=85292&format=png&color=000000', scaledSize: new google.maps.Size(32, 32) }
-                  : desc === 'roadblock' ? { url: 'https://img.icons8.com/?size=100&id=8g0W0dI0kZNi&format=png&color=000000', scaledSize: new google.maps.Size(32, 32) }
-                  : desc === 'wreck' || desc === 'crash' ? { url: 'https://img.icons8.com/?size=100&id=8g0W0dI0kZNi&format=png&color=000000', scaledSize: new google.maps.Size(32, 32) }
-                  : 'http://maps.google.com/mapfiles/ms/icons/red-dot.png';
+        const icon = desc.includes('cop') || desc.includes('police') ? 
+          { url: 'https://img.icons8.com/?size=100&id=fHTZqkybfaA7&format=png&color=000000', scaledSize: new google.maps.Size(32, 32) } :
+          'http://maps.google.com/mapfiles/ms/icons/red-dot.png';
         markers[pin._id] = new google.maps.Marker({
           position: { lat: pin.latitude, lng: pin.longitude },
           map: map,
@@ -826,7 +832,7 @@ function changePage(delta) {
 
 async function fetchWeatherAlerts() {
   try {
-    const response = await fetch(`${BASE_URL}/weather`);
+    const response = await fetch('https://pinmap-website.onrender.com/weather');
     const data = await response.json();
     const weatherContent = document.getElementById('weather-content');
     if (data.alerts && data.alerts.length > 0) {
@@ -856,12 +862,13 @@ function editProfile() {
 
 async function fetchProfile() {
   try {
-    const response = await fetch(`${BASE_URL}/auth/profile`, {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/profile', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
       const profile = await response.json();
-      document.getElementById('profile-picture-preview').src = profile.profilePicture || 'https://via.placeholder.com/150';
+      document.getElementById('profile-picture-preview').src = profile.profilePicture ? 
+        `https://pinmap-website.onrender.com${profile.profilePicture}` : 'https://via.placeholder.com/150';
       document.getElementById('profile-picture-preview').style.display = 'block';
       document.getElementById('profile-username').value = profile.username || '';
       document.getElementById('profile-birthdate').value = profile.birthdate ? profile.birthdate.split('T')[0] : '';
@@ -877,31 +884,26 @@ async function fetchProfile() {
 }
 
 async function updateProfile() {
-  const username = document.getElementById('profile-username').value.trim();
-  const birthdate = document.getElementById('profile-birthdate').value;
-  const sex = document.getElementById('profile-sex').value;
-  const location = document.getElementById('profile-location').value.trim();
-  const profilePicture = document.getElementById('profile-picture').files[0];
-
   const formData = new FormData();
-  if (username) formData.append('username', username);
-  if (birthdate) formData.append('birthdate', birthdate);
-  if (sex) formData.append('sex', sex);
-  if (location) formData.append('location', location);
+  const profilePicture = document.getElementById('profile-picture').files[0];
   if (profilePicture) formData.append('profilePicture', profilePicture);
+  formData.append('username', document.getElementById('profile-username').value);
+  formData.append('birthdate', document.getElementById('profile-birthdate').value);
+  formData.append('sex', document.getElementById('profile-sex').value);
+  formData.append('location', document.getElementById('profile-location').value);
 
   try {
-    const response = await fetch(`${BASE_URL}/auth/profile`, {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/profile', {
       method: 'PUT',
       headers: { 'Authorization': `Bearer ${token}` },
-      body: formData,
+      body: formData
     });
     if (response.ok) {
-      alert('Profile updated successfully');
       fetchProfileForUsername();
+      fetchProfile(); // Refresh profile display
       showMap();
     } else {
-      alert('Failed to update profile: ' + await response.text());
+      alert(await response.text());
     }
   } catch (err) {
     console.error('Update profile error:', err);
@@ -910,25 +912,26 @@ async function updateProfile() {
 }
 
 function closeProfile() {
-  document.getElementById('profile-container').style.display = 'none';
   showMap();
 }
 
-async function viewProfile(userId) {
-  currentProfileUserId = userId;
+async function viewProfile(userIdToView) {
+  currentProfileUserId = userIdToView;
   try {
-    const response = await fetch(`${BASE_URL}/auth/profile/${userId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/auth/profile/${userIdToView}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
       const profile = await response.json();
-      document.getElementById('view-profile-picture').src = profile.profilePicture || 'https://via.placeholder.com/100';
+      document.getElementById('view-profile-picture').src = profile.profilePicture ? 
+        `https://pinmap-website.onrender.com${profile.profilePicture}` : 'https://via.placeholder.com/150';
       document.getElementById('view-profile-picture').style.display = 'block';
       document.getElementById('view-username').textContent = profile.username || profile.email;
-      document.getElementById('view-location').textContent = profile.location || 'Not specified';
-      document.getElementById('view-pin-count').textContent = profile.totalPins || 0;
+      document.getElementById('view-location').textContent = profile.location || 'Not set';
+      document.getElementById('view-pin-count').textContent = profile.pinCount || 0;
+      document.getElementById('view-pin-stars').innerHTML = '★'.repeat(Math.floor(profile.reputation / 10));
       document.getElementById('view-reputation').textContent = profile.reputation || 0;
-      document.getElementById('view-badges').textContent = profile.badges?.join(', ') || 'None';
+      document.getElementById('view-badges').textContent = profile.badges ? profile.badges.join(', ') : 'None';
       document.getElementById('map-container').style.display = 'none';
       document.getElementById('profile-view-container').style.display = 'block';
     } else {
@@ -940,18 +943,21 @@ async function viewProfile(userId) {
   }
 }
 
+function closeProfileView() {
+  document.getElementById('profile-view-container').style.display = 'none';
+  document.getElementById('map-container').style.display = 'block';
+}
+
 async function upvoteUser() {
   try {
-    const response = await fetch(`${BASE_URL}/auth/upvote/${currentProfileUserId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/auth/profile/${currentProfileUserId}/upvote`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
-      const data = await response.json();
-      document.getElementById('view-reputation').textContent = data.reputation;
       viewProfile(currentProfileUserId);
     } else {
-      alert('Failed to upvote user: ' + await response.text());
+      alert(await response.text());
     }
   } catch (err) {
     console.error('Upvote error:', err);
@@ -961,16 +967,14 @@ async function upvoteUser() {
 
 async function downvoteUser() {
   try {
-    const response = await fetch(`${BASE_URL}/auth/downvote/${currentProfileUserId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/auth/profile/${currentProfileUserId}/downvote`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
-      const data = await response.json();
-      document.getElementById('view-reputation').textContent = data.reputation;
       viewProfile(currentProfileUserId);
     } else {
-      alert('Failed to downvote user: ' + await response.text());
+      alert(await response.text());
     }
   } catch (err) {
     console.error('Downvote error:', err);
@@ -979,23 +983,23 @@ async function downvoteUser() {
 }
 
 async function sendPrivateMessage() {
-  const message = document.getElementById('message-input').value.trim();
+  const messageInput = document.getElementById('message-input');
+  const message = messageInput.value.trim();
   if (!message) return alert('Message cannot be empty');
-
   try {
-    const response = await fetch(`${BASE_URL}/auth/message/${currentProfileUserId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/messages/send/${currentProfileUserId}`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: message })
     });
     if (response.ok) {
-      alert('Message sent successfully');
-      document.getElementById('message-input').value = '';
+      messageInput.value = '';
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'privateMessage', recipientId: currentProfileUserId }));
+      }
+      alert('Message sent');
     } else {
-      alert('Failed to send message: ' + await response.text());
+      alert(`Failed to send message: ${await response.text()}`);
     }
   } catch (err) {
     console.error('Send message error:', err);
@@ -1003,43 +1007,28 @@ async function sendPrivateMessage() {
   }
 }
 
-async function showMessages(tab = 'inbox') {
+async function fetchMessages() {
   try {
-    const endpoint = tab === 'inbox' ? '/auth/messages/inbox' : '/auth/messages/outbox';
-    const response = await fetch(`${BASE_URL}${endpoint}`, {
+    const response = await fetch('https://pinmap-website.onrender.com/messages', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
       const messages = await response.json();
+      const messagesList = document.getElementById('messages-list');
+      messagesList.innerHTML = '';
+      messages.forEach(msg => {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'message-item';
+        msgDiv.innerHTML = `
+          <p><strong>${msg.sender.username || msg.sender.email}</strong> (${new Date(msg.timestamp).toLocaleString()}):</p>
+          <p>${msg.content}</p>
+        `;
+        messagesList.appendChild(msgDiv);
+      });
       document.getElementById('map-container').style.display = 'none';
       document.getElementById('messages-container').style.display = 'block';
-      const messagesList = document.getElementById('messages-list');
-      messagesList.innerHTML = `
-        <div class="message-tabs">
-          <button class="${tab === 'inbox' ? 'active' : ''}" onclick="showMessages('inbox')">Inbox (${messages.filter(m => tab === 'inbox' && !m.read).length})</button>
-          <button class="${tab === 'outbox' ? 'active' : ''}" onclick="showMessages('outbox')">Outbox</button>
-        </div>
-        ${messages.map((message, index) => `
-          <div class="message ${tab === 'inbox' && !message.read ? 'unread' : ''}">
-            <div class="message-header">
-              <span class="message-sender">${tab === 'inbox' ? (message.senderId.username || message.senderId.email) : 'To: ' + (message.recipientId.username || message.recipientId.email)}</span>
-              <span class="message-timestamp">${new Date(message.timestamp).toLocaleString()}</span>
-            </div>
-            <p class="message-content">${message.content}</p>
-            <div class="message-actions">
-              ${tab === 'inbox' && !message.read ? `<button class="standard-btn" onclick="markMessageAsRead('${message._id}')">Mark as Read</button>` : ''}
-              ${tab === 'inbox' ? `<button class="standard-btn reply-btn" onclick="showReplyForm('${message._id}', ${index})">Reply</button>` : ''}
-              <button class="standard-btn delete-btn" onclick="deleteMessage('${message._id}', '${tab}')">Delete</button>
-              <button class="standard-btn forward-btn" onclick="showForwardForm('${message._id}', ${index})">Forward</button>
-            </div>
-            <div id="reply-form-${index}" class="reply-form"></div>
-            <div id="forward-form-${index}" class="forward-form"></div>
-          </div>
-        `).join('')}
-      `;
-      checkNewMessages();
     } else {
-      alert('Failed to fetch messages');
+      alert(`Failed to fetch messages: ${await response.text()}`);
     }
   } catch (err) {
     console.error('Fetch messages error:', err);
@@ -1047,196 +1036,21 @@ async function showMessages(tab = 'inbox') {
   }
 }
 
-async function markMessageAsRead(messageId) {
-  try {
-    const response = await fetch(`${BASE_URL}/auth/message/${messageId}/read`, {
-      method: 'PUT',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    if (response.ok) {
-      showMessages('inbox');
-    } else {
-      alert('Failed to mark message as read');
-    }
-  } catch (err) {
-    console.error('Mark message read error:', err);
-    alert('Error marking message as read');
-  }
-}
-
-function showReplyForm(messageId, index) {
-  const replyForm = document.getElementById(`reply-form-${index}`);
-  replyForm.innerHTML = `
-    <textarea id="reply-content-${index}" placeholder="Type your reply..."></textarea>
-    <button class="standard-btn" onclick="sendReply('${messageId}', ${index})">Send Reply</button>
-  `;
-}
-
-async function sendReply(messageId, index) {
-  const content = document.getElementById(`reply-content-${index}`).value.trim();
-  if (!content) return alert('Reply cannot be empty');
-  try {
-    const response = await fetch(`${BASE_URL}/auth/message/${messageId}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ content })
-    });
-    if (response.ok) {
-      alert('Reply sent successfully');
-      showMessages('inbox');
-    } else {
-      alert('Failed to send reply: ' + await response.text());
-    }
-  } catch (err) {
-    console.error('Send reply error:', err);
-    alert('Error sending reply');
-  }
-}
-
-function showForwardForm(messageId, index) {
-  const forwardForm = document.getElementById(`forward-form-${index}`);
-  forwardForm.innerHTML = `
-    <input type="text" id="forward-recipient-${index}" placeholder="Enter recipient email or username">
-    <button class="standard-btn" onclick="forwardMessage('${messageId}', ${index})">Forward</button>
-  `;
-}
-
-async function forwardMessage(messageId, index) {
-  const recipient = document.getElementById(`forward-recipient-${index}`).value.trim();
-  if (!recipient) return alert('Recipient cannot be empty');
-  try {
-    const response = await fetch(`${BASE_URL}/auth/message/forward/${messageId}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ recipient })
-    });
-    if (response.ok) {
-      alert('Message forwarded successfully');
-      showMessages('outbox');
-    } else {
-      alert('Failed to forward message: ' + await response.text());
-    }
-  } catch (err) {
-    console.error('Forward message error:', err);
-    alert('Error forwarding message');
-  }
-}
-
-async function deleteMessage(messageId, tab) {
-  if (!confirm('Are you sure you want to delete this message?')) return;
-  try {
-    const response = await fetch(`${BASE_URL}/auth/message/${messageId}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    if (response.ok) {
-      showMessages(tab);
-    } else {
-      alert('Failed to delete message');
-    }
-  } catch (err) {
-    console.error('Delete message error:', err);
-    alert('Error deleting message');
-  }
-}
-
 async function checkNewMessages() {
   try {
-    const response = await fetch(`${BASE_URL}/auth/messages/inbox`, {
+    const response = await fetch('https://pinmap-website.onrender.com/messages/unread', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.ok) {
-      const messages = await response.json();
-      const unreadCount = messages.filter(msg => !msg.read).length;
-      const messagesBtn = document.getElementById('messages-btn');
-      messagesBtn.textContent = `Messages${unreadCount ? ` (${unreadCount})` : ''}`;
-      messagesBtn.style.color = '#ffffff';
-      messagesBtn.style.backgroundColor = unreadCount ? '#e74c3c' : '#3498db';
+      const unreadCount = await response.json();
+      const messagesBtn = document.querySelector('#map-container .controls button:nth-child(2)');
+      messagesBtn.textContent = `Messages${unreadCount > 0 ? ` (${unreadCount})` : ''}`;
     }
   } catch (err) {
-    console.error('Check new messages error:', err);
+    console.error('Check messages error:', err);
   }
 }
 
 function showAdminPanel() {
-  document.getElementById('map-container').style.display = 'none';
-  document.getElementById('admin-panel').style.display = 'block';
-  fetchAdminData();
-}
-
-async function fetchAdminData() {
-  try {
-    const [pinsResponse, usersResponse, analyticsResponse] = await Promise.all([
-      fetch(`${BASE_URL}/pins`, { headers: { 'Authorization': `Bearer ${token}` } }),
-      fetch(`${BASE_URL}/auth/users`, { headers: { 'Authorization': `Bearer ${token}` } }),
-      fetch(`${BASE_URL}/admin/analytics`, { headers: { 'Authorization': `Bearer ${token}` } })
-    ]);
-
-    if (pinsResponse.status === 401 || usersResponse.status === 401 || analyticsResponse.status === 401) {
-      signOut();
-      return alert('Session expired. Please log in again.');
-    }
-
-    const pins = await pinsResponse.json();
-    const users = await usersResponse.json();
-    const analytics = await analyticsResponse.json();
-
-    const adminPanel = document.getElementById('admin-panel');
-    adminPanel.innerHTML = `
-      <div class="admin-container">
-        <h2>Admin Panel</h2>
-        <button class="standard-btn" onclick="showMap()">Back to Map</button>
-        <div class="analytics">
-          <h3>Analytics</h3>
-          <p>Total Alerts: ${analytics.totalPins}</p>
-          <p>Active Users: ${analytics.activeUsers}</p>
-          <h4>Alert Types:</h4>
-          <ul>${analytics.pinTypes.map(pt => `<li>${pt.type}: ${pt.count}</li>`).join('')}</ul>
-          <h4>Top Contributors:</h4>
-          <ul>${analytics.topUsers.map(user => `<li>${user.username || user.email}: ${user.totalPins || 0} pins</li>`).join('')}</ul>
-        </div>
-        <h3>Manage Alerts</h3>
-        <table class="pin-table">
-          <thead>
-            <tr>
-              <th>Description</th>
-              <th>Latitude</th>
-              <th>Longitude</th>
-              <th>Posted By</th>
-              <th>Timestamp (ET)</th>
-              <th>Expires</th>
-              <th>Media</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="admin-pin-list"></tbody>
-        </table>
-      </div>
-    `;
-    const adminPinList = document.getElementById('admin-pin-list');
-    adminPinList.innerHTML = pins.map(pin => `
-      <tr>
-        <td>${pin.description}</td>
-        <td>${pin.latitude.toFixed(4)}</td>
-        <td>${pin.longitude.toFixed(4)}</td>
-        <td>${pin.username || pin.userEmail}</td>
-        <td>${new Date(pin.createdAt).toLocaleString()}</td>
-        <td>${new Date(pin.expiresAt).toLocaleString()}</td>
-        <td>${pin.media ? `<img src="https://img.icons8.com/small/20/image.png" class="media-view-icon" onclick="viewMedia('${pin.media}')">` : 'N/A'}</td>
-        <td>
-          <button class="standard-btn remove-btn" onclick="removePin('${pin._id}')">Remove</button>
-          <button class="standard-btn extend-btn" onclick="extendPin('${pin._id}')">Extend</button>
-        </td>
-      </tr>
-    `).join('');
-  } catch (err) {
-    console.error('Fetch admin data error:', err);
-    alert('Error fetching admin data');
-  }
+  window.location.href = 'admin.html';
 }
