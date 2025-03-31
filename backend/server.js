@@ -8,26 +8,28 @@ const path = require('path');
 const WebSocket = require('ws');
 const Chat = require('./models/chat');
 const User = require('./models/user');
-const Message = require('./models/message'); // Import from models/message.js
+const Message = require('./models/message');
 const BannedIP = require('./models/bannedIp');
 
 dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: 'https://frontend-a966.onrender.com', // Restrict to frontend URL
+  credentials: true,
+}));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use(express.static(path.join(__dirname, '../frontend'))); // Serve frontend from ../frontend
 app.use('/auth', authRoutes);
 app.use('/pins', pinRoutes);
 
-// MongoDB Connection (removed deprecated options)
+// MongoDB Connection
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('MongoDB connected:', mongoose.connection.name)) // Should log 'pinmaps'
+  .then(() => console.log('MongoDB connected:', mongoose.connection.name))
   .catch(err => {
     console.error('MongoDB connection error:', err);
-    process.exit(1); // Exit if connection fails
+    process.exit(1);
   });
 
 // User Location Schema
@@ -49,12 +51,24 @@ const wss = new WebSocket.Server({ server });
 const adminEmail = 'imhoggbox@gmail.com';
 const onlineUsers = new Map();
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   console.log('Client connected');
 
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
+
+      if (!ws.userId || !ws.email) {
+        if (data.type === 'auth' && data.userId && data.email) {
+          ws.userId = data.userId;
+          ws.email = data.email;
+          console.log(`WebSocket authenticated: ${ws.email}, ${ws.userId}`);
+        } else {
+          ws.send(JSON.stringify({ type: 'error', message: 'Authentication required' }));
+          return;
+        }
+      }
+
       if (data.type === 'location') {
         const { userId, email, latitude, longitude } = data;
         await Location.findOneAndUpdate(
@@ -113,7 +127,7 @@ wss.on('connection', (ws) => {
         const { senderId, recipientId, content } = data;
         const messageDoc = new Message({ senderId, recipientId, content });
         await messageDoc.save();
-        const recipientWs = Array.from(onlineUsers.values()).find(u => u.userId === recipientId)?.ws;
+        const recipientWs = Array.from(onlineUsers.values()).find(u => u.ws.userId === recipientId)?.ws;
         if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
           recipientWs.send(JSON.stringify({ type: 'privateMessage', senderId, recipientId, content }));
         }
@@ -147,19 +161,8 @@ wss.on('connection', (ws) => {
   });
 });
 
-app.get('/set-ws-email', (req, res) => {
-  const { email, userId } = req.query;
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN && !client.email) {
-      client.email = email;
-      client.userId = userId;
-      console.log(`Set WebSocket email: ${email}, userId: ${userId}`);
-    }
-  });
-  res.send('Email and userId set for WebSocket');
-});
-
-// Authentication Middleware
+// Admin Analytics Endpoint
+const { Pin } = require('./models/pin');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -174,8 +177,6 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// Admin Analytics Endpoint
-const { Pin } = require('./models/pin'); // Import Pin model correctly
 app.get('/admin/analytics', authenticateToken, async (req, res) => {
   if (req.user.email !== adminEmail) return res.status(403).send('Admin only');
   try {
@@ -191,9 +192,4 @@ app.get('/admin/analytics', authenticateToken, async (req, res) => {
     console.error('Analytics error:', err);
     res.status(500).send('Server error');
   }
-});
-
-// Catch-all route for SPA
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend', 'index.html'));
 });
