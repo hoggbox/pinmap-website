@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Milledgeville Alert Map</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="/css/style.css" type="text/css">
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
   <link rel="icon" href="data:,">
   <style>
@@ -96,16 +96,21 @@
       <h2>Edit Profile</h2>
       <div class="profile-picture-section">
         <img id="profile-picture-preview" alt="Profile Picture" style="display: none;">
+        <label for="profile-picture">Profile Picture:</label>
         <input type="file" id="profile-picture" accept="image/*">
       </div>
+      <label for="profile-username">Username:</label>
       <input type="text" id="profile-username" placeholder="Username">
+      <label for="profile-birthdate">Birthdate:</label>
       <input type="date" id="profile-birthdate">
+      <label for="profile-sex">Sex:</label>
       <select id="profile-sex">
         <option value="">Select Sex</option>
         <option value="Male">Male</option>
         <option value="Female">Female</option>
         <option value="Other">Other</option>
       </select>
+      <label for="profile-location">Location:</label>
       <input type="text" id="profile-location" placeholder="Location">
       <div class="profile-buttons">
         <button onclick="updateProfile()">Save</button>
@@ -146,7 +151,7 @@
     </div>
     <div id="admin-panel" style="display: none;"></div>
   </div>
-  <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBBfsJsm_7LQbjuU5Y8CaphIBHBD3JCwSQ&libraries=places,marker&callback=initMap"></script>
-  <script src="js/script.js"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBBfsJsm_7LQbjuU5Y8CaphIBHBD3JCwSQ&libraries=places,marker&callback=initMap" defer></script>
+  <script src="/js/script.js"></script>
 </body>
 </html>
