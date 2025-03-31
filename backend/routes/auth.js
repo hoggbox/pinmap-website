@@ -60,10 +60,11 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
       profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
     });
     await user.save();
-    res.status(201).json({ message: 'User registered successfully' });
+    const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '1h' });
+    res.status(201).json({ message: 'User registered successfully', token });
   } catch (err) {
     console.error('Register error:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error during registration' });
   }
 });
 
@@ -152,7 +153,7 @@ router.put('/location', authMiddleware, async (req, res) => {
 });
 
 // Send Private Message
-router.post('/message/:id', authMiddleware, async (req, res) => {
+router.post('/messages/send/:id', authMiddleware, async (req, res) => {
   const { content } = req.body;
   try {
     const recipient = await User.findById(req.params.id);
@@ -166,35 +167,39 @@ router.post('/message/:id', authMiddleware, async (req, res) => {
     await message.save();
     sender.activityLogs.push({ action: 'Sent private message', details: `To: ${recipient.email}` });
     await sender.save();
-    res.json({ message: 'Message sent' });
+    res.json({ message: 'Message sent', messageId: message._id });
   } catch (err) {
     console.error('Send message error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Get Inbox Messages
-router.get('/messages/inbox', authMiddleware, async (req, res) => {
+// Get All Messages (Inbox + Outbox)
+router.get('/messages', authMiddleware, async (req, res) => {
   try {
-    const messages = await Message.find({ recipientId: req.user.id })
+    const messages = await Message.find({
+      $or: [{ senderId: req.user.id }, { recipientId: req.user.id }]
+    })
       .populate('senderId', 'username email')
-      .sort({ timestamp: -1 });
-    res.json(messages);
-  } catch (err) {
-    console.error('Get inbox messages error:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Get Outbox Messages
-router.get('/messages/outbox', authMiddleware, async (req, res) => {
-  try {
-    const messages = await Message.find({ senderId: req.user.id })
       .populate('recipientId', 'username email')
       .sort({ timestamp: -1 });
     res.json(messages);
   } catch (err) {
-    console.error('Get outbox messages error:', err);
+    console.error('Get messages error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get Unread Message Count
+router.get('/messages/unread', authMiddleware, async (req, res) => {
+  try {
+    const unreadCount = await Message.countDocuments({
+      recipientId: req.user.id,
+      read: false
+    });
+    res.json(unreadCount);
+  } catch (err) {
+    console.error('Get unread messages error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -275,7 +280,7 @@ router.post('/message/forward/:messageId', authMiddleware, async (req, res) => {
 });
 
 // Upvote User
-router.post('/upvote/:id', authMiddleware, async (req, res) => {
+router.post('/profile/:id/upvote', authMiddleware, async (req, res) => {
   try {
     const userToUpvote = await User.findById(req.params.id);
     if (!userToUpvote) return res.status(404).json({ message: 'User not found' });
@@ -297,7 +302,7 @@ router.post('/upvote/:id', authMiddleware, async (req, res) => {
 });
 
 // Downvote User
-router.post('/downvote/:id', authMiddleware, async (req, res) => {
+router.post('/profile/:id/downvote', authMiddleware, async (req, res) => {
   try {
     const userToDownvote = await User.findById(req.params.id);
     if (!userToDownvote) return res.status(404).json({ message: 'User not found' });
