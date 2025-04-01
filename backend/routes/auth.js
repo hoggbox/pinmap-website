@@ -137,7 +137,7 @@ router.put('/profile', authMiddleware, upload.single('profilePicture'), async (r
         console.error('Update profile error:', err);
         res.status(500).json({ message: 'Server error' });
     }
-});
+}
 
 // Get User Profile by ID
 router.get('/profile/:id', authMiddleware, async (req, res) => {
