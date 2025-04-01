@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
-const { Pin, Comment } = require('../models/pin');
-const User = require('../models/user');
-const authenticate = require('../middleware/authenticate');
+const { Pin, Comment } = require('./models/pin');
+const User = require('./models/user');
+const authenticate = require('./middleware/authenticate');
 const multer = require('multer');
 const path = require('path');
 
@@ -245,10 +245,6 @@ router.post('/vote/:id', authenticate, async (req, res) => {
         }
         pin.voters.push(req.user.id);
         pin.voteCount += 1;
-        if (pin.voteCount >= 8) {
-            await Pin.findByIdAndDelete(req.params.id);
-            return res.json({ removed: true, message: 'Pin removed due to votes' });
-        }
         await pin.save();
         const user = await User.findById(req.user.id);
         user.activityLogs.push({ action: 'Voted to remove pin', details: pin._id.toString() });
