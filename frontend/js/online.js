@@ -27,10 +27,10 @@ function signOut() {
 }
 
 function setupWebSocket() {
-  ws = new WebSocket('ws://localhost:5000');
+  ws = new WebSocket('wss://pinmap-website.onrender.com');
   ws.onopen = () => {
     console.log('WebSocket connected');
-    fetch(`/set-ws-email?email=${encodeURIComponent('imhoggbox@gmail.com')}&userId=${encodeURIComponent('admin')}`);
+    fetch(`https://pinmap-website.onrender.com/set-ws-email?email=${encodeURIComponent('imhoggbox@gmail.com')}&userId=${encodeURIComponent('admin')}`);
   };
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
