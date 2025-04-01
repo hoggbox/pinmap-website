@@ -138,6 +138,28 @@ router.put('/profile', authMiddleware, upload.single('profilePicture'), async (r
     }
 });
 
+// Send Private Message
+router.post('/send/:id', authMiddleware, async (req, res) => {
+    const { content } = req.body;
+    try {
+        const recipient = await User.findById(req.params.id);
+        if (!recipient) return res.status(404).json({ message: 'Recipient not found' });
+        const sender = await User.findById(req.user.id);
+        const message = new Message({
+            senderId: req.user.id,
+            recipientId: req.params.id,
+            content
+        });
+        await message.save();
+        sender.activityLogs.push({ action: 'Sent private message', details: `To: ${recipient.email}` });
+        await sender.save();
+        res.json({ message: 'Message sent' });
+    } catch (err) {
+        console.error('Send message error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
 // Get User Profile by ID
 router.get('/profile/:id', authMiddleware, async (req, res) => {
     try {
