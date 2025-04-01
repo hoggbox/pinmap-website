@@ -124,22 +124,14 @@ wss.on('connection', (ws, req) => {
           }
         });
       } else if (data.type === 'privateMessage') {
-          const { userId, recipientId, content } = data;
-           // Find the recipient's WebSocket connection
-            const recipient = Array.from(onlineUsers.entries()).find(([key, value]) => key === recipientId);
-
-            // Check if the recipient is online
-            if (recipient) {
-                const recipientWs = recipient[1].ws;
-                // Construct and send the private message
-                recipientWs.send(JSON.stringify({
-                    type: 'privateMessage',
-                    senderId: userId,
-                    recipientId: recipientId,
-                    content: content
-                }));
-            }
+        const { senderId, recipientId, content } = data;
+        const messageDoc = new Message({ senderId, recipientId, content });
+        await messageDoc.save();
+        const recipientWs = Array.from(onlineUsers.values()).find(u => u.ws.userId === recipientId)?.ws;
+        if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
+          recipientWs.send(JSON.stringify({ type: 'privateMessage', senderId, recipientId, content }));
         }
+      }
     } catch (err) {
       console.error('WebSocket message error:', err);
       ws.send(JSON.stringify({ type: 'error', message: 'WebSocket processing error' }));
