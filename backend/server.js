@@ -11,11 +11,7 @@ const User = require('./models/user');
 const Message = require('./models/message');
 const BannedIP = require('./models/bannedIp');
 
-try {
-  dotenv.config();
-} catch (error) {
-  console.error("Error configuring dotenv:", error);
-}
+dotenv.config();
 const app = express();
 
 // Middleware
@@ -28,22 +24,26 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/auth', authRoutes);
 app.use('/pins', pinRoutes);
 
-// Mock the Pin Route for testing
-app.post('/pins', (req, res) => {
-  console.log("Request to /pins received", req.body); // Log the request body
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log('MongoDB connected:', mongoose.connection.name))
+  .catch(err => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  });
 
-  // Simulate success
-  return res.status(200).json({ message: "Mock Pin created successfully!" });
-
-  // Simulate error
-  //return res.status(500).json({ message: "Mock Server Error - Failed to create pin" });
+// User Location Schema
+const locationSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  email: { type: String, required: true },
+  location: {
+    type: { type: String, enum: ['Point'], default: 'Point' },
+    coordinates: { type: [Number], required: true }
+  },
+  timestamp: { type: Date, default: Date.now },
 });
-
-// Mock the weather route for testing
-app.get('/weather', (req, res) => {
-    console.log("Request to /weather received"); // Log the request
-    return res.status(200).json({ message: "Mock weather request was successful"});
-});
+locationSchema.index({ location: '2dsphere' });
+const Location = mongoose.model('Location', locationSchema);
 
 // WebSocket Server
 const server = app.listen(process.env.PORT || 5000, () => console.log(`Server running on port ${process.env.PORT || 5000}`));
@@ -192,18 +192,4 @@ app.get('/admin/analytics', authenticateToken, async (req, res) => {
     console.error('Analytics error:', err);
     res.status(500).send('Server error');
   }
-});
-
-// WebSocket Email/User Setting endpoint
-app.get('/set-ws-email', (req, res) => {
-  const { email, userId } = req.query;
-  if (!email || !userId) {
-    return res.status(400).send('Email and userId are required');
-  }
-  
-  // Store for future reference if needed
-  console.log(`Setting WebSocket identity: ${email}, ${userId}`);
-  
-  // Send a successful response
-  res.status(200).send('WebSocket identity set');
 });
