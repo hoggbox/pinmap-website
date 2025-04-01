@@ -11,7 +11,11 @@ const User = require('./models/user');
 const Message = require('./models/message');
 const BannedIP = require('./models/bannedIp');
 
-dotenv.config();
+try {
+  dotenv.config();
+} catch (error) {
+  console.error("Error configuring dotenv:", error);
+}
 const app = express();
 
 // Middleware
