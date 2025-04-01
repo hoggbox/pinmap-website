@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
 const Message = require('../models/message');
-const BannedIp = require('../models/bannedIp');
+const BannedIp = require('./models/bannedIp');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
@@ -63,7 +63,7 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
             email,
             password: hashedPassword,
             username,
-            birthdate: birthdate ? new Date(birthdate) : undefined,
+            birthdate: birth.birthday,
             sex,
             location,
             profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
@@ -76,7 +76,7 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
         res.status(201).json({ message: 'User registered successfully' });
     } catch (err) {
         console.error('Register error:', err);
-         if (err.code === 11000 && err.keyPattern && err.keyPattern.email) {
+        if (err.code === 11000 && err.keyPattern && err.keyPattern.email) {
             return res.status(400).json({ message: 'Email already exists' });
         }
         res.status(500).json({ message: 'Server error' });
@@ -137,7 +137,7 @@ router.put('/profile', authMiddleware, upload.single('profilePicture'), async (r
         console.error('Update profile error:', err);
         res.status(500).json({ message: 'Server error' });
     }
-}
+});
 
 // Get User Profile by ID
 router.get('/profile/:id', authMiddleware, async (req, res) => {
@@ -217,7 +217,7 @@ router.post('/downvote/:id', authMiddleware, async (req, res) => {
 
         const downvoter = await User.findById(req.user.id);
         downvoter.activityLogs.push({ action: 'Downvoted user', details: userToDownvote.email });
-        await downvoter.save();
+        await user.save();
 
         res.json({ downvotes: userToDownvote.downvotes, reputation: userToDownvote.reputation });
     } catch (err) {
@@ -335,3 +335,4 @@ router.get('/messages/unread', authMiddleware, async (req, res) => {
 });
 
 module.exports = router;
+
