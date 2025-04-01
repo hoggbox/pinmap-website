@@ -27,7 +27,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-function initMap() {  
+function initMap() {
   map = new google.maps.Map(document.getElementById('map'), {
     zoom: 12,
     styles: [
@@ -406,7 +406,7 @@ async function addPin() {
     body: formData,
   });
   if (postResponse.ok) {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'newPin', pin: { latitude: currentLatLng.lat, longitude: currentLatLng.lng, description } }));
     }
     fetchPins();
@@ -760,10 +760,11 @@ async function fetchPins() {
 
     filteredPins.forEach(pin => {
       if (!markers[pin._id]) {
-        const desc = pin.description.toLowerCase();
-        const icon = desc.includes('cop') || desc.includes('police') ? 
-          { url: 'https://img.icons8.com/?size=100&id=fHTZqkybfaA7&format=png&color=000000', scaledSize: new google.maps.Size(32, 32) } :
-          'http://maps.google.com/mapfiles/ms/icons/red-dot.png';
+         // Use red alert icon for all icons
+        const icon = {
+          url: 'https://img.icons8.com/?size=100&id=11684&format=png&color=000000', // Red alert icon
+          scaledSize: new google.maps.Size(32, 32)
+        };
         markers[pin._id] = new google.maps.Marker({
           position: { lat: pin.latitude, lng: pin.longitude },
           map: map,
@@ -994,9 +995,16 @@ async function sendPrivateMessage() {
     });
     if (response.ok) {
       messageInput.value = '';
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'privateMessage', recipientId: currentProfileUserId }));
-      }
+      //Fix WS for message
+       if (ws && ws.readyState === WebSocket.OPEN) {
+           const payload = JSON.parse(atob(token.split('.')[1]));
+            ws.send(JSON.stringify({
+                type: 'privateMessage',
+                userId: payload.id,
+                recipientId: currentProfileUserId,
+                content: message
+            }));
+        }
       alert('Message sent');
     } else {
       alert(`Failed to send message: ${await response.text()}`);
@@ -1008,32 +1016,40 @@ async function sendPrivateMessage() {
 }
 
 async function fetchMessages() {
-  try {
-    const response = await fetch('https://pinmap-website.onrender.com/messages', {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    if (response.ok) {
-      const messages = await response.json();
-      const messagesList = document.getElementById('messages-list');
-      messagesList.innerHTML = '';
-      messages.forEach(msg => {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = 'message-item';
-        msgDiv.innerHTML = `
-          <p><strong>${msg.sender.username || msg.sender.email}</strong> (${new Date(msg.timestamp).toLocaleString()}):</p>
-          <p>${msg.content}</p>
-        `;
-        messagesList.appendChild(msgDiv);
-      });
-      document.getElementById('map-container').style.display = 'none';
-      document.getElementById('messages-container').style.display = 'block';
-    } else {
-      alert(`Failed to fetch messages: ${await response.text()}`);
+    try {
+        const response = await fetch('https://pinmap-website.onrender.com/auth/messages', {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        if (response.ok) {
+            const messages = await response.json();
+            const messagesList = document.getElementById('messages-list');
+            messagesList.innerHTML = ''; // Clear existing messages
+
+            if (messages.length === 0) {
+                messagesList.innerHTML = '<p>No messages to display.</p>';
+            } else {
+                messages.forEach(msg => {
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = 'message-item';
+                    msgDiv.innerHTML = `
+                        <p><strong>${msg.senderId.username || msg.senderId.email}</strong> (${new Date(msg.timestamp).toLocaleString()}):</p>
+                        <p>${msg.content}</p>
+                    `;
+                    messagesList.appendChild(msgDiv);
+                });
+            }
+            document.getElementById('map-container').style.display = 'none';
+            document.getElementById('messages-container').style.display = 'block';
+        } else {
+            alert(`Failed to fetch messages: ${await response.text()}`);
+        }
+    } catch (err) {
+        console.error('Fetch messages error:', err);
+        alert('Error fetching messages');
     }
-  } catch (err) {
-    console.error('Fetch messages error:', err);
-    alert('Error fetching messages');
-  }
 }
 
 async function checkNewMessages() {
