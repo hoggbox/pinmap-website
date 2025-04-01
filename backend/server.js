@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const mongoose = require('mongoose');
 const WebSocket = require('ws');
@@ -6,10 +7,12 @@ const pinRoutes = require('./routes/pins');
 const authRoutes = require('./routes/auth');
 const messageRoutes = require('./routes/messages');
 const weatherRoutes = require('./routes/weather');
+require('dotenv').config(); // Load environment variables from .env file
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Use environment variable for MongoDB URI, default to a local address if not found
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost/milledgeville_map', {
   useNewUrlParser: true,
   useUnifiedTopology: true
@@ -23,8 +26,10 @@ app.use('/auth', authRoutes);
 app.use('/messages', messageRoutes);
 app.use('/weather', weatherRoutes);
 
+// Serve static files from the frontend directory
 app.use(express.static(path.join(__dirname, '../frontend')));
 
+// Handle all other requests by serving the frontend's index.html
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/index.html'));
 });
@@ -33,6 +38,7 @@ const server = app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
 
+// WebSocket Server Setup
 const wss = new WebSocket.Server({ server });
 const clients = new Map();
 
