@@ -17,8 +17,8 @@ async function register() {
   formData.append('password', password);
   if (username) formData.append('username', username);
   if (birthdate) formData.append('birthdate', birthdate);
-  if (sex) formData.append('sex', sex);
-  if (location) formData.append('location', location);
+  formData.append('sex', sex);
+  formData.append('location', location);
   if (profilePicture) formData.append('profilePicture', profilePicture);
 
   try {
@@ -26,20 +26,30 @@ async function register() {
       method: 'POST',
       body: formData,
     });
-    const data = await response.json();
-    if (response.ok || response.status === 201) { // Accept 201 as success too
+
+    const data = await response.json(); // Parse JSON here to check the error
+
+    if (response.ok) {
       const registerForm = document.getElementById('register-form');
       const successModal = document.getElementById('success-modal');
-      
+
       if (registerForm) registerForm.style.display = 'none';
       if (successModal) successModal.style.display = 'block';
       else alert('Registration successful! Redirecting to login...');
-      
+
       setTimeout(() => {
         window.location.href = 'index.html';
       }, 2000);
     } else {
-      alert(`Registration failed: ${data.message || 'Unknown error'}`);
+       // Check if the error is specifically about duplicate key
+        if (data.message && data.message.includes('duplicate key error')) {
+            // Redirect to login page
+            alert('Account created, redirecting to login');
+            window.location.href = 'index.html';
+        } else {
+            // Handle other errors
+            alert(`Registration failed: ${data.message || 'Unknown error'}`);
+        }
     }
   } catch (err) {
     console.error('Registration error:', err);
@@ -62,6 +72,7 @@ function previewProfilePicture(event) {
   }
 }
 
+// Event listeners
 const profilePictureInput = document.getElementById('profile-picture');
 if (profilePictureInput) {
   profilePictureInput.addEventListener('change', previewProfilePicture);
