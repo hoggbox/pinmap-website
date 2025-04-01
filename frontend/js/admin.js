@@ -33,7 +33,7 @@ function signOut() {
 
 async function fetchUsers() {
   try {
-    const response = await fetch('http://localhost:5000/auth/users', {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/users', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.status === 401) {
@@ -164,7 +164,7 @@ async function deleteSelected() {
   if (selected.length === 0) return alert('No users selected');
   if (!confirm(`Are you sure you want to delete ${selected.length} user(s)?`)) return;
   try {
-    const response = await fetch('http://localhost:5000/auth/users/bulk-delete', {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/users/bulk-delete', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ userIds: selected })
@@ -190,7 +190,7 @@ async function banSelected() {
   if (selected.length === 0) return alert('No valid IPs selected');
   if (!confirm(`Are you sure you want to ban ${selected.length} IP(s)?`)) return;
   try {
-    const response = await fetch('http://localhost:5000/auth/ban-ip', {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/ban-ip', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ipAddresses: selected })
@@ -211,7 +211,7 @@ async function banSelected() {
 async function deleteUser(userId) {
   if (!confirm('Are you sure you want to delete this user?')) return;
   try {
-    const response = await fetch('http://localhost:5000/auth/users/bulk-delete', {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/users/bulk-delete', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ userIds: [userId] })
@@ -233,7 +233,7 @@ async function banUser(ipAddress) {
   if (!ipAddress || ipAddress === 'Unknown') return alert('No IP address to ban');
   if (!confirm(`Are you sure you want to ban IP ${ipAddress}?`)) return;
   try {
-    const response = await fetch('http://localhost:5000/auth/ban-ip', {
+    const response = await fetch('https://pinmap-website.onrender.com/auth/ban-ip', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ipAddresses: [ipAddress] })
@@ -287,7 +287,7 @@ function updateChart(users) {
 }
 
 function exportToCSV() {
-  fetch('http://localhost:5000/auth/users', {
+  fetch('https://pinmap-website.onrender.com/auth/users', {
     headers: { 'Authorization': `Bearer ${token}` }
   })
     .then(response => {
