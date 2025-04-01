@@ -11,17 +11,7 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
   filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname)),
 });
-const upload = multer({ 
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-  fileFilter: (req, file, cb) => {
-    const filetypes = /jpeg|jpg|png|gif|mp4|webm/;
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = filetypes.test(file.mimetype);
-    if (extname && mimetype) return cb(null, true);
-    cb('Error: Only images (jpeg, jpg, png, gif) and videos (mp4, webm) allowed!');
-  },
-});
+const upload = multer({ storage });
 
 async function removeExpiredPins() {
   try {
@@ -42,10 +32,7 @@ router.get('/', authenticate, async (req, res) => {
       .populate('userId', 'email username location')
       .populate({
         path: 'comments',
-        populate: { 
-          path: 'userId', 
-          select: 'username email' 
-        }
+        populate: { path: 'replies', populate: { path: 'replies' } }
       });
     res.json(pins.length ? pins : []);
   } catch (err) {
@@ -81,25 +68,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     }
     await user.save();
 
-    const populatedPin = await Pin.findById(pin._id)
-      .populate('userId', 'email username location')
-      .populate({
-        path: 'comments',
-        populate: { path: 'userId', select: 'username email' }
-      });
-
-    // Broadcast new pin via WebSocket
-    if (req.app.wss) {
-      req.app.wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'newPin',
-            pin: populatedPin
-          }));
-        }
-      });
-    }
-
+    const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
     res.status(201).json(populatedPin);
   } catch (err) {
     console.error('Error adding pin:', err);
@@ -202,20 +171,6 @@ router.post('/comment/:id', authenticate, async (req, res) => {
     const populatedComment = await Comment.findById(comment._id)
       .populate('userId', 'username email')
       .populate({ path: 'replies', populate: { path: 'userId', select: 'username email' } });
-
-    // Broadcast new comment via WebSocket
-    if (req.app.wss) {
-      req.app.wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'newComment',
-            pinId: pin._id,
-            comment: populatedComment
-          }));
-        }
-      });
-    }
-
     res.status(201).json(populatedComment);
   } catch (err) {
     console.error('Error adding comment:', err);
