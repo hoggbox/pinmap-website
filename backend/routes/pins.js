@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose');
-const { Pin, Comment } = require('../models/pin');
 const User = require('../models/user');
-const authenticate = require('../middleware/authenticate');
+const Message = require('../models/message');
+const BannedIp = require('../models/bannedIp');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
 
@@ -11,260 +12,323 @@ const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'uploads/'),
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname)),
 });
-const upload = multer({ storage });
-
-async function removeExpiredPins() {
-    try {
-        const now = new Date();
-        await Pin.deleteMany({ expiresAt: { $lt: now } });
-        console.log('Expired pins removed');
-    } catch (err) {
-        console.error('Error removing expired pins:', err);
-    }
-}
-setInterval(removeExpiredPins, 60 * 60 * 1000);
-
-// Get all pins
-router.get('/', authenticate, async (req, res) => {
-    try {
-        await removeExpiredPins();
-        const pins = await Pin.find()
-            .populate('userId', 'email username location')
-            .populate({
-                path: 'comments',
-                populate: { path: 'replies', populate: { path: 'replies' } }
-            });
-        res.json(pins.length ? pins : []);
-    } catch (err) {
-        console.error('Error fetching pins:', err);
-        res.status(500).json({ message: 'Server error fetching pins', error: err.message });
-    }
+const upload = multer({
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const filetypes = /jpeg|jpg|png|gif/;
+        const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+        const mimetype = filetypes.test(file.mimetype);
+        if (extname && mimetype) return cb(null, true);
+        cb('Error: Images only (jpeg, jpg, png, gif)!');
+    },
 });
 
-// Add a pin
-router.post('/', authenticate, (req, res, next) => {
-    upload.single('media')(req, res, async (err) => {
-        if (err) {
-            console.error('Multer error:', err);
-            return res.status(500).json({ message: 'File upload error', error: err.message });
-        }
-
-        try {
-            const { latitude, longitude, description, expiresAt } = req.body;
-            const media = req.file ? `/uploads/${req.file.filename}` : null;
-            const user = await User.findById(req.user.id);
-            if (!user) {
-                console.log('user does not exist');
-                return res.status(404).json({ message: 'User not found' });
-            }
-
-            const pin = new Pin({
-                userId: req.user.id,
-                userEmail: user.email,
-                username: user.username || null,
-                latitude,
-                longitude,
-                description,
-                media,
-                expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000),
-            });
-            await pin.save();
-
-            user.totalPins += 1;
-            user.activityLogs.push({ action: 'Posted pin', details: pin._id.toString() });
-            if (user.totalPins >= 10 && !user.badges.includes('10_Pins')) {
-                user.badges.push('10_Pins');
-            }
-            await user.save();
-
-            const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
-            res.status(201).json(populatedPin);
-        } catch (err) {
-            console.error('Error adding pin:', err);
-            res.status(500).json({ message: 'Server error', error: err.message });
-        }
-    });
-});
-
-// Extend pin expiration
-router.put('/extend/:id', authenticate, async (req, res) => {
+const authMiddleware = (req, res, next) => {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) return res.status(401).json({ message: 'No token provided' });
     try {
-        const pin = await Pin.findById(req.params.id);
-        if (!pin) return res.status(404).json({ message: 'Pin not found' });
-        if (pin.userId.toString() !== req.user.id && req.user.email !== 'imhoggbox@gmail.com') {
-            return res.status(403).json({ message: 'Unauthorized' });
-        }
-        pin.expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
-        await pin.save();
-        res.json(pin);
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+        req.user = decoded;
+        next();
     } catch (err) {
-        console.error('Error extending pin:', err);
-        res.status(500).json({ message: 'Server error' });
+        res.status(401).json({ message: 'Invalid token' });
     }
-});
+};
 
-// Verify a pin
-router.post('/verify/:id', authenticate, async (req, res) => {
+const adminMiddleware = (req, res, next) => {
+    if (req.user.email !== 'imhoggbox@gmail.com') {
+        return res.status(403).json({ message: 'Admin access only' });
+    }
+    next();
+};
+
+// Register
+router.post('/register', upload.single('profilePicture'), async (req, res) => {
+    const { email, password, username, birthdate, sex, location } = req.body;
+
     try {
-        const pin = await Pin.findById(req.params.id);
-        if (!pin) return res.status(404).json({ message: 'Pin not found' });
-        if (pin.verifications.includes(req.user.id)) {
-            return res.status(400).json({ message: 'You have already verified this pin' });
+        // Check if the user already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ message: 'Email already exists' });
         }
-        pin.verifications.push(req.user.id);
-        if (pin.verifications.length >= 3) pin.verified = true;
-        await pin.save();
 
-        const user = await User.findById(req.user.id);
-        user.activityLogs.push({ action: 'Verified pin', details: pin._id.toString() });
-        const verifiedPins = await Pin.countDocuments({ verifications: req.user.id });
-        if (verifiedPins >= 5 && !user.badges.includes('5_Verifications')) {
-            user.badges.push('5_Verifications');
-        }
+        // Hash the password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create the new user
+        const user = new User({
+            email,
+            password: hashedPassword,
+            username,
+            birthdate: birthdate ? new Date(birthdate) : undefined,
+            sex,
+            location,
+            profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
+        });
+
+        // Save the user to the database
         await user.save();
 
-        res.json({ verifications: pin.verifications.length, verified: pin.verified });
+        // Respond with a success message
+        res.status(201).json({ message: 'User registered successfully' });
     } catch (err) {
-        console.error('Error verifying pin:', err);
-        res.status(500).json({ message: 'Server error' });
-    }
-});
-
-// Get comments for a pin
-router.get('/comments/:id', authenticate, async (req, res) => {
-    try {
-        const pin = await Pin.findById(req.params.id).populate({
-            path: 'comments',
-            populate: [
-                { path: 'userId', select: 'username email' },
-                { path: 'replies', populate: { path: 'userId', select: 'username email' } }
-            ]
-        });
-        if (!pin) return res.status(404).json({ message: 'Pin not found' });
-        res.json(pin.comments);
-    } catch (err) {
-        console.error('Error fetching comments:', err);
-        res.status(500).json({ message: 'Server error' });
-    }
-});
-
-// Add comment to pin
-router.post('/comment/:id', authenticate, async (req, res) => {
-    try {
-        const { content, parentCommentId } = req.body;
-        if (!content || content.trim() === '') {
-            return res.status(400).json({ message: 'Comment content cannot be empty' });
+        console.error('Register error:', err);
+         if (err.code === 11000 && err.keyPattern && err.keyPattern.email) {
+            return res.status(400).json({ message: 'Email already exists' });
         }
-        const pin = await Pin.findById(req.params.id);
-        if (!pin) return res.status(404).json({ message: 'Pin not found' });
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Login
+router.post('/login', async (req, res) => {
+    const { email, password, stayLoggedIn } = req.body;
+    try {
+        const user = await User.findOne({ email });
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+        if (user.isBanned) return res.status(403).json({ message: 'Account is banned' });
+        user.lastLogin = new Date();
+        user.ipAddress = req.ip;
+        const daysActive = Math.floor((new Date() - new Date(user.joinDate)) / (1000 * 60 * 60 * 24));
+        if (daysActive >= 30 && !user.badges.includes('30_Days_Active')) {
+            user.badges.push('30_Days_Active');
+        }
+        await user.save();
+        const expiresIn = stayLoggedIn ? '30d' : '1h';
+        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn });
+        res.json({ token });
+    } catch (err) {
+        console.error('Login error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Get Profile
+router.get('/profile', authMiddleware, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('-password');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (err) {
+        console.error('Profile error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Update Profile
+router.put('/profile', authMiddleware, upload.single('profilePicture'), async (req, res) => {
+    const { username, birthdate, sex, location } = req.body;
+    try {
         const user = await User.findById(req.user.id);
         if (!user) return res.status(404).json({ message: 'User not found' });
-
-        const comment = new Comment({
-            userId: req.user.id,
-            username: user.username || user.email,
-            content: content.trim(),
-            timestamp: new Date(),
-        });
-
-        if (parentCommentId) {
-            const parentComment = await Comment.findById(parentCommentId);
-            if (!parentComment) return res.status(404).json({ message: 'Parent comment not found' });
-            parentComment.replies.push(comment);
-            await parentComment.save();
-        } else {
-            pin.comments.push(comment);
-            await pin.save();
-        }
-
-        await comment.save();
-        const populatedComment = await Comment.findById(comment._id)
-            .populate('userId', 'username email')
-            .populate({ path: 'replies', populate: { path: 'userId', select: 'username email' } });
-        res.status(201).json(populatedComment);
-    } catch (err) {
-        console.error('Error adding comment:', err);
-        res.status(500).json({ message: 'Server error', error: err.message });
-    }
-});
-
-// Like a comment
-router.post('/comment/:commentId/like', authenticate, async (req, res) => {
-    try {
-        const comment = await Comment.findById(req.params.commentId);
-        if (!comment) return res.status(404).json({ message: 'Comment not found' });
-        if (comment.likes.includes(req.user.id)) {
-            return res.status(400).json({ message: 'You already liked this comment' });
-        }
-        if (comment.dislikes.includes(req.user.id)) {
-            comment.dislikes = comment.dislikes.filter(id => id.toString() !== req.user.id);
-        }
-        comment.likes.push(req.user.id);
-        await comment.save();
-        res.json({ likes: comment.likes.length, dislikes: comment.dislikes.length });
-    } catch (err) {
-        console.error('Error liking comment:', err);
-        res.status(500).json({ message: 'Server error' });
-    }
-});
-
-// Dislike a comment
-router.post('/comment/:commentId/dislike', authenticate, async (req, res) => {
-    try {
-        const comment = await Comment.findById(req.params.commentId);
-        if (!comment) return res.status(404).json({ message: 'Comment not found' });
-        if (comment.dislikes.includes(req.user.id)) {
-            return res.status(400).json({ message: 'You already disliked this comment' });
-        }
-        if (comment.likes.includes(req.user.id)) {
-            comment.likes = comment.likes.filter(id => id.toString() !== req.user.id);
-        }
-        comment.dislikes.push(req.user.id);
-        await comment.save();
-        res.json({ likes: comment.likes.length, dislikes: comment.dislikes.length });
-    } catch (err) {
-        console.error('Error disliking comment:', err);
-        res.status(500).json({ message: 'Server error' });
-    }
-});
-
-// Vote to remove a pin
-router.post('/vote/:id', authenticate, async (req, res) => {
-    try {
-        const pin = await Pin.findById(req.params.id);
-        if (!pin) return res.status(404).json({ message: 'Pin not found' });
-        if (pin.voters.includes(req.user.id)) {
-            return res.status(400).json({ message: 'You have already voted' });
-        }
-        pin.voters.push(req.user.id);
-        pin.voteCount += 1;
-        if (pin.voteCount >= 8) {
-            await Pin.findByIdAndDelete(req.params.id);
-            return res.json({ removed: true, message: 'Pin removed due to votes' });
-        }
-        await pin.save();
-        const user = await User.findById(req.user.id);
-        user.activityLogs.push({ action: 'Voted to remove pin', details: pin._id.toString() });
+        if (username) user.username = username;
+        if (birthdate) user.birthdate = birthdate;
+        if (sex) user.sex = sex;
+        if (location) user.location = location;
+        if (req.file) user.profilePicture = `/uploads/${req.file.filename}`;
         await user.save();
-        res.json({ voteCount: pin.voteCount });
+        res.json(user);
     } catch (err) {
-        console.error('Error voting on pin:', err);
+        console.error('Update profile error:', err);
         res.status(500).json({ message: 'Server error' });
     }
 });
 
-// Delete a pin
-router.delete('/:id', authenticate, async (req, res) => {
+// Get User Profile by ID
+router.get('/profile/:id', authMiddleware, async (req, res) => {
     try {
-        const pin = await Pin.findById(req.params.id);
-        if (!pin) return res.status(404).json({ message: 'Pin not found' });
-        if (pin.userId.toString() !== req.user.id && req.user.email !== 'imhoggbox@gmail.com') {
-            return res.status(403).json({ message: 'Unauthorized' });
-        }
-        await Pin.findByIdAndDelete(req.params.id);
-        res.json({ message: 'Pin deleted' });
+        const user = await User.findById(req.params.id).select('-password');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
     } catch (err) {
-        console.error('Error deleting pin:', err);
+        console.error('Get profile error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Update Current Location
+router.put('/location', authMiddleware, async (req, res) => {
+    const { latitude, longitude } = req.body;
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        user.currentLatitude = latitude;
+        user.currentLongitude = longitude;
+        await user.save();
+        res.json({ message: 'Location updated', latitude, longitude });
+    } catch (err) {
+        console.error('Update location error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Get Inbox Messages
+router.get('/messages', authMiddleware, async (req, res) => {
+    try {
+        // Retrieve messages where the user is the recipient
+        const messages = await Message.find({ recipientId: req.user.id })
+            .populate('senderId', 'username email') // Populate sender information
+            .sort({ timestamp: -1 }); // Sort by timestamp, newest first
+
+        res.json(messages);
+    } catch (err) {
+        console.error('Get inbox messages error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Upvote User
+router.post('/upvote/:id', authMiddleware, async (req, res) => {
+    try {
+        const userToUpvote = await User.findById(req.params.id);
+        if (!userToUpvote) return res.status(404).json({ message: 'User not found' });
+        if (req.user.id === req.params.id) return res.status(400).json({ message: 'Cannot upvote yourself' });
+
+        userToUpvote.upvotes += 1;
+        userToUpvote.reputation += 1;
+        await userToUpvote.save();
+
+        const upvoter = await User.findById(req.user.id);
+        upvoter.activityLogs.push({ action: 'Upvoted user', details: userToUpvote.email });
+        await upvoter.save();
+
+        res.json({ upvotes: userToUpvote.upvotes, reputation: userToUpvote.reputation });
+    } catch (err) {
+        console.error('Upvote error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Downvote User
+router.post('/downvote/:id', authMiddleware, async (req, res) => {
+    try {
+        const userToDownvote = await User.findById(req.params.id);
+        if (!userToDownvote) return res.status(404).json({ message: 'User not found' });
+        if (req.user.id === req.params.id) return res.status(400).json({ message: 'Cannot downvote yourself' });
+
+        userToDownvote.downvotes += 1;
+        userToDownvote.reputation -= 1;
+        await userToDownvote.save();
+
+        const downvoter = await User.findById(req.user.id);
+        downvoter.activityLogs.push({ action: 'Downvoted user', details: userToDownvote.email });
+        await downvoter.save();
+
+        res.json({ downvotes: userToDownvote.downvotes, reputation: userToDownvote.reputation });
+    } catch (err) {
+        console.error('Downvote error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Get All Users (Admin Only)
+router.get('/users', authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+        const users = await User.find().select('-password');
+        res.json(users);
+    } catch (err) {
+        console.error('Fetch users error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Get User Activity Logs (Admin Only)
+router.get('/activity/:id', authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user.activityLogs);
+    } catch (err) {
+        console.error('Fetch activity logs error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Bulk Delete Users (Admin Only)
+router.post('/users/bulk-delete', authMiddleware, adminMiddleware, async (req, res) => {
+    const { userIds } = req.body;
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+        return res.status(400).json({ message: 'No user IDs provided' });
+    }
+    try {
+        const result = await User.deleteMany({ _id: { $in: userIds } });
+        res.json({ message: `${result.deletedCount} user(s) deleted` });
+    } catch (err) {
+        console.error('Bulk delete error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Ban IPs (Admin Only)
+router.post('/ban-ip', authMiddleware, adminMiddleware, async (req, res) => {
+    const { ipAddresses } = req.body;
+    if (!Array.isArray(ipAddresses) || ipAddresses.length === 0) {
+        return res.status(400).json({ message: 'No IP addresses provided' });
+    }
+    try {
+        const result = await User.updateMany(
+            { ipAddress: { $in: ipAddresses } },
+            { $set: { isBanned: true } }
+        );
+        await BannedIp.findOneAndUpdate(
+            { ipAddress: ip },
+            { ipAddress: ip, adminId: req.user.id, reason: 'Admin ban' },
+            { upsert: true }
+        );
+        res.json({ message: `${result.modifiedCount} user(s) banned` });
+    } catch (err) {
+        console.error('Ban IP error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Unban IPs (Admin Only)
+router.post('/unban-ip', authMiddleware, adminMiddleware, async (req, res) => {
+    const { ipAddresses } = req.body;
+    if (!Array.isArray(ipAddresses) || ipAddresses.length === 0) {
+        return res.status(400).json({ message: 'No IP addresses provided' });
+    }
+    try {
+        const result = await User.updateMany(
+            { ipAddress: { $in: ipAddresses } },
+            { $set: { isBanned: false } }
+        );
+        await BannedIp.updateMany(
+            { ipAddress: { $in: ipAddresses } },
+            { $set: { unbannedAt: new Date() } }
+        );
+        res.json({ message: `${result.modifiedCount} user(s) unbanned` });
+    } catch (err) {
+        console.error('Unban IP error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Get IP Ban History (Admin Only)
+router.get('/ip-ban-history', authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+        const bans = await BannedIp.find().populate('adminId', 'email');
+        res.json(bans);
+    } catch (err) {
+        console.error('Fetch IP ban history error:', err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Endpoint for unread message count
+router.get('/messages/unread', authMiddleware, async (req, res) => {
+    try {
+        const count = await Message.countDocuments({
+            recipientId: req.user.id,
+            read: false
+        });
+        res.json(count);
+    } catch (err) {
+        console.error('Get unread count error:', err);
         res.status(500).json({ message: 'Server error' });
     }
 });
