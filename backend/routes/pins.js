@@ -42,38 +42,48 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // Add a pin
-router.post('/', authenticate, upload.single('media'), async (req, res) => {
-    try {
-        const { latitude, longitude, description, expiresAt } = req.body;
-        const media = req.file ? `/uploads/${req.file.filename}` : null;
-        const user = await User.findById(req.user.id);
-        if (!user) return res.status(404).json({ message: 'User not found' });
-
-        const pin = new Pin({
-            userId: req.user.id,
-            userEmail: user.email,
-            username: user.username || null,
-            latitude,
-            longitude,
-            description,
-            media,
-            expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000),
-        });
-        await pin.save();
-
-        user.totalPins += 1;
-        user.activityLogs.push({ action: 'Posted pin', details: pin._id.toString() });
-        if (user.totalPins >= 10 && !user.badges.includes('10_Pins')) {
-            user.badges.push('10_Pins');
+router.post('/', authenticate, (req, res, next) => {
+    upload.single('media')(req, res, async (err) => {
+        if (err) {
+            console.error('Multer error:', err);
+            return res.status(500).json({ message: 'File upload error', error: err.message });
         }
-        await user.save();
 
-        const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
-        res.status(201).json(populatedPin);
-    } catch (err) {
-        console.error('Error adding pin:', err);
-        res.status(500).json({ message: 'Server error', error: err.message });
-    }
+        try {
+            const { latitude, longitude, description, expiresAt } = req.body;
+            const media = req.file ? `/uploads/${req.file.filename}` : null;
+            const user = await User.findById(req.user.id);
+            if (!user) {
+                console.log('user does not exist');
+                return res.status(404).json({ message: 'User not found' });
+            }
+
+            const pin = new Pin({
+                userId: req.user.id,
+                userEmail: user.email,
+                username: user.username || null,
+                latitude,
+                longitude,
+                description,
+                media,
+                expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000),
+            });
+            await pin.save();
+
+            user.totalPins += 1;
+            user.activityLogs.push({ action: 'Posted pin', details: pin._id.toString() });
+            if (user.totalPins >= 10 && !user.badges.includes('10_Pins')) {
+                user.badges.push('10_Pins');
+            }
+            await user.save();
+
+            const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
+            res.status(201).json(populatedPin);
+        } catch (err) {
+            console.error('Error adding pin:', err);
+            res.status(500).json({ message: 'Server error', error: err.message });
+        }
+    });
 });
 
 // Extend pin expiration
