@@ -11,15 +11,19 @@ const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'uploads/'),
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname)),
 });
+
 const upload = multer({
-    storage,
-    limits: { fileSize: 5 * 1024 * 1024 },
+    storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // Increased file size limit to 10MB
     fileFilter: (req, file, cb) => {
-        const filetypes = /jpeg|jpg|png|gif/;
+        const filetypes = /jpeg|jpg|png|gif|mp4|webm/;
         const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
         const mimetype = filetypes.test(file.mimetype);
-        if (extname && mimetype) return cb(null, true);
-        cb('Error: Images only (jpeg, jpg, png, gif)!');
+        if (extname && mimetype) {
+            cb(null, true);
+        } else {
+            cb('Error: Images and videos only (jpeg, jpg, png, gif, mp4, webm)!');
+        }
     },
 });
 
@@ -57,7 +61,10 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
         const { latitude, longitude, description, expiresAt } = req.body;
         const media = req.file ? `/uploads/${req.file.filename}` : null;
         const user = await User.findById(req.user.id);
-        if (!user) return res.status(404).json({ message: 'User not found' });
+        if (!user) {
+            console.log('user does not exist');
+            return res.status(404).json({ message: 'User not found' });
+        }
 
         const pin = new Pin({
             userId: req.user.id,
