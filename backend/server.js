@@ -24,26 +24,22 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/auth', authRoutes);
 app.use('/pins', pinRoutes);
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('MongoDB connected:', mongoose.connection.name))
-  .catch(err => {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
-  });
+// Mock the Pin Route for testing
+app.post('/pins', (req, res) => {
+  console.log("Request to /pins received", req.body); // Log the request body
 
-// User Location Schema
-const locationSchema = new mongoose.Schema({
-  userId: { type: String, required: true },
-  email: { type: String, required: true },
-  location: {
-    type: { type: String, enum: ['Point'], default: 'Point' },
-    coordinates: { type: [Number], required: true }
-  },
-  timestamp: { type: Date, default: Date.now },
+  // Simulate success
+  return res.status(200).json({ message: "Mock Pin created successfully!" });
+
+  // Simulate error
+  //return res.status(500).json({ message: "Mock Server Error - Failed to create pin" });
 });
-locationSchema.index({ location: '2dsphere' });
-const Location = mongoose.model('Location', locationSchema);
+
+// Mock the weather route for testing
+app.get('/weather', (req, res) => {
+    console.log("Request to /weather received"); // Log the request
+    return res.status(200).json({ message: "Mock weather request was successful"});
+});
 
 // WebSocket Server
 const server = app.listen(process.env.PORT || 5000, () => console.log(`Server running on port ${process.env.PORT || 5000}`));
