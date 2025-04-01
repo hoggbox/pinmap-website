@@ -32,7 +32,7 @@ router.get('/', authenticate, async (req, res) => {
       .populate('userId', 'email username location')
       .populate({
         path: 'comments',
-        populate: { path: 'replies', populate: { path: 'userId', select: 'username email' } }
+        populate: { path: 'replies', populate: { path: 'replies' } }
       });
     res.json(pins.length ? pins : []);
   } catch (err) {
@@ -55,7 +55,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
       username: user.username || null,
       latitude,
       longitude,
-      description,
+      description: description || '', // Use user-provided description
       media,
       expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000),
     });
@@ -69,6 +69,15 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     await user.save();
 
     const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
+    // Broadcast new pin via WebSocket (requires frontend to listen)
+    const wss = req.app.get('wss'); // Assuming WebSocket server is attached to app
+    if (wss) {
+      wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'newPin', pin: populatedPin }));
+        }
+      });
+    }
     res.status(201).json(populatedPin);
   } catch (err) {
     console.error('Error adding pin:', err);
@@ -171,6 +180,15 @@ router.post('/comment/:id', authenticate, async (req, res) => {
     const populatedComment = await Comment.findById(comment._id)
       .populate('userId', 'username email')
       .populate({ path: 'replies', populate: { path: 'userId', select: 'username email' } });
+    // Broadcast new comment via WebSocket
+    const wss = req.app.get('wss');
+    if (wss) {
+      wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'newComment', comment: populatedComment, pinId: pin._id }));
+        }
+      });
+    }
     res.status(201).json(populatedComment);
   } catch (err) {
     console.error('Error adding comment:', err);
