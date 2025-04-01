@@ -35,7 +35,7 @@ async function fetchUserActivity() {
   }
 
   try {
-    const response = await fetch(`http://localhost:5000/auth/profile/${userId}`, {
+    const response = await fetch(`https://pinmap-website.onrender.com/auth/profile/${userId}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (response.status === 401) {
@@ -47,7 +47,7 @@ async function fetchUserActivity() {
 
     const picture = document.getElementById('activity-profile-picture');
     if (user.profilePicture) {
-      picture.src = `http://localhost:5000${user.profilePicture}`;
+      picture.src = `https://pinmap-website.onrender.com${user.profilePicture}`;
       picture.style.display = 'block';
     } else {
       picture.style.display = 'none';
@@ -56,7 +56,7 @@ async function fetchUserActivity() {
     document.getElementById('activity-username').textContent = user.username || 'Unknown';
     document.getElementById('activity-birthdate').textContent = user.birthdate ? 
       new Date(user.birthdate).toLocaleDateString() : 'Not specified';
-    document.getElementById('activity-join-date').textContent = new Date(user.joinDate).toLocaleDateString();
+    document.getElementById('activity-join-date').textContent =new Date(user.joinDate).toLocaleDateString();
     document.getElementById('activity-current-pins').textContent = user.currentPins;
     document.getElementById('activity-total-pins').textContent = user.totalPins;
     document.getElementById('activity-last-online').textContent = user.lastLogin ? 
