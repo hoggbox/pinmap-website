@@ -9,9 +9,19 @@ const path = require('path');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname)),
+  filename: (req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const filetypes = /jpeg|jpg|png|gif/;
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = filetypes.test(file.mimetype);
+    if (extname && mimetype) return cb(null, true);
+    cb(new Error('Only images (jpeg, jpg, png, gif) are allowed'));
+  },
+});
 
 async function removeExpiredPins() {
   try {
@@ -32,7 +42,7 @@ router.get('/', authenticate, async (req, res) => {
       .populate('userId', 'email username location')
       .populate({
         path: 'comments',
-        populate: { path: 'replies', populate: { path: 'replies' } }
+        populate: { path: 'replies', populate: { path: 'replies' } },
       });
     res.json(pins.length ? pins : []);
   } catch (err) {
@@ -45,6 +55,9 @@ router.get('/', authenticate, async (req, res) => {
 router.post('/', authenticate, upload.single('media'), async (req, res) => {
   try {
     const { latitude, longitude, description, expiresAt } = req.body;
+    if (!latitude || !longitude || !description) {
+      return res.status(400).json({ message: 'Latitude, longitude, and description are required' });
+    }
     const media = req.file ? `/uploads/${req.file.filename}` : null;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -53,9 +66,9 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
       userId: req.user.id,
       userEmail: user.email,
       username: user.username || null,
-      latitude,
-      longitude,
-      description: description || '', // Use user-provided description
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      description: description.trim(),
       media,
       expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000),
     });
@@ -69,15 +82,6 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     await user.save();
 
     const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
-    // Broadcast new pin via WebSocket (requires frontend to listen)
-    const wss = req.app.get('wss'); // Assuming WebSocket server is attached to app
-    if (wss) {
-      wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ type: 'newPin', pin: populatedPin }));
-        }
-      });
-    }
     res.status(201).json(populatedPin);
   } catch (err) {
     console.error('Error adding pin:', err);
@@ -98,7 +102,7 @@ router.put('/extend/:id', authenticate, async (req, res) => {
     res.json(pin);
   } catch (err) {
     console.error('Error extending pin:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
@@ -125,7 +129,7 @@ router.post('/verify/:id', authenticate, async (req, res) => {
     res.json({ verifications: pin.verifications.length, verified: pin.verified });
   } catch (err) {
     console.error('Error verifying pin:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
@@ -136,14 +140,14 @@ router.get('/comments/:id', authenticate, async (req, res) => {
       path: 'comments',
       populate: [
         { path: 'userId', select: 'username email' },
-        { path: 'replies', populate: { path: 'userId', select: 'username email' } }
-      ]
+        { path: 'replies', populate: { path: 'userId', select: 'username email' } },
+      ],
     });
     if (!pin) return res.status(404).json({ message: 'Pin not found' });
     res.json(pin.comments);
   } catch (err) {
     console.error('Error fetching comments:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
@@ -180,15 +184,6 @@ router.post('/comment/:id', authenticate, async (req, res) => {
     const populatedComment = await Comment.findById(comment._id)
       .populate('userId', 'username email')
       .populate({ path: 'replies', populate: { path: 'userId', select: 'username email' } });
-    // Broadcast new comment via WebSocket
-    const wss = req.app.get('wss');
-    if (wss) {
-      wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ type: 'newComment', comment: populatedComment, pinId: pin._id }));
-        }
-      });
-    }
     res.status(201).json(populatedComment);
   } catch (err) {
     console.error('Error adding comment:', err);
@@ -205,14 +200,14 @@ router.post('/comment/:commentId/like', authenticate, async (req, res) => {
       return res.status(400).json({ message: 'You already liked this comment' });
     }
     if (comment.dislikes.includes(req.user.id)) {
-      comment.dislikes = comment.dislikes.filter(id => id.toString() !== req.user.id);
+      comment.dislikes = comment.dislikes.filter((id) => id.toString() !== req.user.id);
     }
     comment.likes.push(req.user.id);
     await comment.save();
     res.json({ likes: comment.likes.length, dislikes: comment.dislikes.length });
   } catch (err) {
     console.error('Error liking comment:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
@@ -225,14 +220,14 @@ router.post('/comment/:commentId/dislike', authenticate, async (req, res) => {
       return res.status(400).json({ message: 'You already disliked this comment' });
     }
     if (comment.likes.includes(req.user.id)) {
-      comment.likes = comment.likes.filter(id => id.toString() !== req.user.id);
+      comment.likes = comment.likes.filter((id) => id.toString() !== req.user.id);
     }
     comment.dislikes.push(req.user.id);
     await comment.save();
     res.json({ likes: comment.likes.length, dislikes: comment.dislikes.length });
   } catch (err) {
     console.error('Error disliking comment:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
@@ -257,7 +252,7 @@ router.post('/vote/:id', authenticate, async (req, res) => {
     res.json({ voteCount: pin.voteCount });
   } catch (err) {
     console.error('Error voting on pin:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
@@ -273,7 +268,7 @@ router.delete('/:id', authenticate, async (req, res) => {
     res.json({ message: 'Pin deleted' });
   } catch (err) {
     console.error('Error deleting pin:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
 
