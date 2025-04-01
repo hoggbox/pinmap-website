@@ -1,9 +1,12 @@
+// auth.js
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
 const User = require('../models/user');
+const Pin = require('../models/Pin'); // Ensure Pin model is required
+const Message = require('../models/Message'); // Ensure Message model is required
 const authenticateToken = require('../middleware/authenticate');
 
 const router = express.Router();
@@ -47,7 +50,26 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
 });
 
 router.post('/login', async (req, res) => {
-  const { email, password, _
+  const { email, password } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(400).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET || 'your_jwt_secret', { expiresIn: '24h' });
+    res.json({ success: true, token: token, userId: user._id, username: user.username, profilePicture: user.profilePicture }); // Include userId, username, and profilePicture
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ success: false, message: 'Server error during login' });
+  }
+});
 
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
