@@ -13,7 +13,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const filetypes = /jpeg|jpg|png|gif/;
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
@@ -39,7 +39,7 @@ router.get('/', authenticate, async (req, res) => {
   try {
     await removeExpiredPins();
     const pins = await Pin.find()
-      .populate('userId', 'email username location')
+      .populate('userId', 'email username location role')
       .populate({
         path: 'comments',
         populate: { path: 'replies', populate: { path: 'replies' } },
@@ -54,7 +54,7 @@ router.get('/', authenticate, async (req, res) => {
 // Add a pin
 router.post('/', authenticate, upload.single('media'), async (req, res) => {
   try {
-    const { latitude, longitude, description, expiresAt } = req.body;
+    const { latitude, longitude, description, expiresInHours } = req.body;
     if (!latitude || !longitude || !description) {
       return res.status(400).json({ message: 'Latitude, longitude, and description are required' });
     }
@@ -62,6 +62,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    const expiresAt = expiresInHours ? new Date(Date.now() + parseInt(expiresInHours) * 60 * 60 * 1000) : new Date(Date.now() + 2 * 60 * 60 * 1000);
     const pin = new Pin({
       userId: req.user.id,
       userEmail: user.email,
@@ -70,7 +71,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
       longitude: parseFloat(longitude),
       description: description.trim(),
       media,
-      expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000),
+      expiresAt
     });
     await pin.save();
 
@@ -81,7 +82,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     }
     await user.save();
 
-    const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
+    const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location role');
     res.status(201).json(populatedPin);
   } catch (err) {
     console.error('Error adding pin:', err);
@@ -94,7 +95,8 @@ router.put('/extend/:id', authenticate, async (req, res) => {
   try {
     const pin = await Pin.findById(req.params.id);
     if (!pin) return res.status(404).json({ message: 'Pin not found' });
-    if (pin.userId.toString() !== req.user.id && req.user.email !== 'imhoggbox@gmail.com') {
+    const user = await User.findById(req.user.id);
+    if (pin.userId.toString() !== req.user.id && user.role !== 'admin' && user.role !== 'moderator') {
       return res.status(403).json({ message: 'Unauthorized' });
     }
     pin.expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
@@ -261,7 +263,8 @@ router.delete('/:id', authenticate, async (req, res) => {
   try {
     const pin = await Pin.findById(req.params.id);
     if (!pin) return res.status(404).json({ message: 'Pin not found' });
-    if (pin.userId.toString() !== req.user.id && req.user.email !== 'imhoggbox@gmail.com') {
+    const user = await User.findById(req.user.id);
+    if (pin.userId.toString() !== req.user.id && user.role !== 'admin' && user.role !== 'moderator') {
       return res.status(403).json({ message: 'Unauthorized' });
     }
     await Pin.findByIdAndDelete(req.params.id);
