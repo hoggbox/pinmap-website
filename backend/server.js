@@ -10,6 +10,7 @@ const Chat = require('./models/chat');
 const User = require('./models/user');
 const Message = require('./models/message');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
 
 dotenv.config();
 const app = express();
@@ -73,7 +74,7 @@ wss.on('connection', (ws, req) => {
     try {
       const data = JSON.parse(message);
 
-      // Stronger WebSocket Authentication
+      // WebSocket Authentication
       if (!ws.userId || !ws.email) {
         if (data.type === 'auth' && data.userId && data.email && data.token) {
           const decoded = jwt.verify(data.token, process.env.JWT_SECRET || 'your-secret-key');
@@ -81,6 +82,8 @@ wss.on('connection', (ws, req) => {
             ws.userId = data.userId;
             ws.email = data.email;
             console.log(`WebSocket authenticated: ${ws.email}, ${ws.userId}`);
+            onlineUsers.set(ws.userId, { ws, email: ws.email, latitude: null, longitude: null, timestamp: new Date() });
+            broadcastOnlineUsers();
           } else {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid authentication' }));
             ws.close();
@@ -105,6 +108,7 @@ wss.on('connection', (ws, req) => {
           { upsert: true, new: true }
         );
         onlineUsers.set(userId, { ws, email, latitude, longitude, timestamp: new Date() });
+        broadcastOnlineUsers();
 
         wss.clients.forEach(async (client) => {
           if (client.readyState === WebSocket.OPEN) {
@@ -121,14 +125,6 @@ wss.on('connection', (ws, req) => {
                   })),
                 })
               );
-              const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
-                userId,
-                email: info.email,
-                latitude: info.latitude,
-                longitude: info.longitude,
-                timestamp: info.timestamp,
-              }));
-              client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
             } else if (client.email === email && client.userId === userId) {
               client.send(JSON.stringify({ type: 'location', userId, email, latitude, longitude }));
             }
@@ -139,19 +135,7 @@ wss.on('connection', (ws, req) => {
         if (!message.trim()) throw new Error('Message cannot be empty');
         const chatMessage = new Chat({ userId, username, message });
         await chatMessage.save();
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(
-              JSON.stringify({
-                type: 'chat',
-                userId,
-                username,
-                message,
-                timestamp: chatMessage.timestamp,
-              })
-            );
-          }
-        });
+        broadcastChatMessage(chatMessage);
       } else if (data.type === 'privateMessage') {
         const { senderId, recipientId, content } = data;
         if (!content.trim()) throw new Error('Message content cannot be empty');
@@ -161,6 +145,20 @@ wss.on('connection', (ws, req) => {
         if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
           recipientWs.send(JSON.stringify({ type: 'privateMessage', senderId, recipientId, content }));
         }
+      } else if (data.type === 'newPin') {
+        const { pin } = data;
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: 'newPin', pin }));
+          }
+        });
+      } else if (data.type === 'newComment') {
+        const { pinId } = data;
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: 'newComment', pinId }));
+          }
+        });
       }
     } catch (err) {
       console.error('WebSocket message error:', err);
@@ -173,27 +171,46 @@ wss.on('connection', (ws, req) => {
     for (const [userId, info] of onlineUsers) {
       if (info.ws === ws) {
         onlineUsers.delete(userId);
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN && client.email === adminEmail) {
-            const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
-              userId,
-              email: info.email,
-              latitude: info.latitude,
-              longitude: info.longitude,
-              timestamp: info.timestamp,
-            }));
-            client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
-          }
-        });
+        broadcastOnlineUsers();
         break;
       }
     }
   });
 });
 
+function broadcastOnlineUsers() {
+  const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
+    userId,
+    email: info.email,
+    latitude: info.latitude,
+    longitude: info.longitude,
+    timestamp: info.timestamp,
+  }));
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN && client.email === adminEmail) {
+      client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
+    }
+  });
+}
+
+function broadcastChatMessage(chatMessage) {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(
+        JSON.stringify({
+          type: 'chat',
+          userId: chatMessage.userId,
+          username: chatMessage.username,
+          message: chatMessage.message,
+          timestamp: chatMessage.timestamp,
+        })
+      );
+    }
+  });
+}
+
 // Admin Analytics Endpoint
 const { Pin } = require('./models/pin');
-const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
 function authenticateToken(req, res, next) {
@@ -227,4 +244,15 @@ app.get('/admin/analytics', authenticateToken, async (req, res) => {
 // Health Check Endpoint for Render
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy' });
+});
+
+// Fetch all chat messages
+app.get('/chat', authenticateToken, async (req, res) => {
+  try {
+    const chats = await Chat.find().sort({ timestamp: -1 }).limit(50);
+    res.json(chats);
+  } catch (err) {
+    console.error('Error fetching chat messages:', err);
+    res.status(500).json({ message: 'Server error fetching chat messages' });
+  }
 });
