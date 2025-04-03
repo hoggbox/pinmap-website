@@ -11,6 +11,7 @@ const User = require('./models/user');
 const Message = require('./models/message');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const webpush = require('web-push'); // Add web-push
 
 dotenv.config();
 const app = express();
@@ -58,6 +59,20 @@ const locationSchema = new mongoose.Schema({
 });
 locationSchema.index({ location: '2dsphere' });
 const Location = mongoose.model('Location', locationSchema);
+
+// Push Subscription Schema
+const subscriptionSchema = new mongoose.Schema({
+  userId: String,
+  subscription: Object,
+});
+const PushSubscription = mongoose.model('PushSubscription', subscriptionSchema);
+
+// Web Push Setup
+webpush.setVapidDetails(
+  'mailto:your-email@example.com', // Replace with your email
+  process.env.VAPID_PUBLIC_KEY || 'YOUR_PUBLIC_VAPID_KEY', // Add to .env
+  process.env.VAPID_PRIVATE_KEY || 'YOUR_PRIVATE_VAPID_KEY' // Add to .env
+);
 
 // WebSocket Server
 const server = app.listen(process.env.PORT || 5000, () =>
@@ -168,6 +183,19 @@ wss.on('connection', (ws, req) => {
             client.send(JSON.stringify({ type: 'newPin', pin: data.pin }));
           }
         });
+        // Send push notification
+        const subscriptions = await PushSubscription.find();
+        const payload = JSON.stringify({
+          title: 'New Alert Posted!',
+          body: `A new alert has been posted: ${data.pin.description}`,
+        });
+        subscriptions.forEach(async (sub) => {
+          try {
+            await webpush.sendNotification(sub.subscription, payload);
+          } catch (err) {
+            console.error('Push notification error:', err);
+          }
+        });
       } else if (data.type === 'newComment') {
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
@@ -239,4 +267,20 @@ app.get('/admin/analytics', authenticateToken, async (req, res) => {
 // Health Check Endpoint for Render
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy' });
+});
+
+// Push Subscription Endpoint
+app.post('/subscribe', authenticateToken, async (req, res) => {
+  const subscription = req.body;
+  try {
+    await PushSubscription.findOneAndUpdate(
+      { userId: req.user.id },
+      { userId: req.user.id, subscription },
+      { upsert: true }
+    );
+    res.status(201).json({ message: 'Subscription saved' });
+  } catch (err) {
+    console.error('Subscription error:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
 });
