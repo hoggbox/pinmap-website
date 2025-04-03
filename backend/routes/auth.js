@@ -14,15 +14,15 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
   fileFilter: (req, file, cb) => {
     const filetypes = /jpeg|jpg|png|gif/;
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
     if (extname && mimetype) return cb(null, true);
-    cb(new Error('Error: Images only (jpeg, jpg, png, gif)!'));
+    cb(new Error('Only images (jpeg, jpg, png, gif) are allowed'));
   },
-});
+}).single('profilePicture');
 
 const authMiddleware = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -44,30 +44,39 @@ const adminMiddleware = (req, res, next) => {
 };
 
 // Register
-router.post('/register', upload.single('profilePicture'), async (req, res) => {
-  const { email, password, username, birthdate, sex, location } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required' });
-  }
-  try {
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ message: 'Email already exists' });
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({
-      email,
-      password: hashedPassword,
-      username: username || undefined,
-      birthdate: birthdate ? new Date(birthdate) : undefined,
-      sex: sex || undefined,
-      location: location || undefined,
-      profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
-    });
-    await user.save();
-    res.status(201).json({ message: 'User registered successfully', userId: user._id });
-  } catch (err) {
-    console.error('Register error:', err);
-    res.status(500).json({ message: 'Server error during registration', error: err.message });
-  }
+router.post('/register', (req, res) => {
+  upload(req, res, async (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ message: 'File size too large. Maximum size is 5MB.' });
+      }
+      return res.status(400).json({ message: err.message });
+    }
+
+    const { email, password, username, birthdate, sex, location } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+    try {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) return res.status(400).json({ message: 'Email already exists' });
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = new User({
+        email,
+        password: hashedPassword,
+        username: username || undefined,
+        birthdate: birthdate ? new Date(birthdate) : undefined,
+        sex: sex || undefined,
+        location: location || undefined,
+        profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
+      });
+      await user.save();
+      res.status(201).json({ message: 'User registered successfully', userId: user._id });
+    } catch (err) {
+      console.error('Register error:', err);
+      res.status(500).json({ message: 'Server error during registration', error: err.message });
+    }
+  });
 });
 
 // Login
@@ -115,7 +124,10 @@ router.get('/profile', authMiddleware, async (req, res) => {
 });
 
 // Update Profile
-router.put('/profile', authMiddleware, upload.single('profilePicture'), async (req, res) => {
+router.put('/profile', authMiddleware, upload, async (req, res) => {
+  if (req.fileValidationError) {
+    return res.status(400).json({ message: req.fileValidationError });
+  }
   const { username, birthdate, sex, location } = req.body;
   try {
     const user = await User.findById(req.user.id);
