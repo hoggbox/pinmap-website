@@ -11,7 +11,7 @@ const User = require('./models/user');
 const Message = require('./models/message');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
-const webpush = require('web-push'); // Add web-push
+const webpush = require('web-push');
 
 dotenv.config();
 const app = express();
@@ -70,8 +70,8 @@ const PushSubscription = mongoose.model('PushSubscription', subscriptionSchema);
 // Web Push Setup
 webpush.setVapidDetails(
   'mailto:your-email@example.com', // Replace with your email
-  process.env.VAPID_PUBLIC_KEY || 'YOUR_PUBLIC_VAPID_KEY', // Add to .env
-  process.env.VAPID_PRIVATE_KEY || 'YOUR_PRIVATE_VAPID_KEY' // Add to .env
+  process.env.VAPID_PUBLIC_KEY || 'YOUR_PUBLIC_VAPID_KEY', // Ensure in .env
+  process.env.VAPID_PRIVATE_KEY || 'YOUR_PRIVATE_VAPID_KEY' // Ensure in .env
 );
 
 // WebSocket Server
@@ -80,7 +80,7 @@ const server = app.listen(process.env.PORT || 5000, () =>
 );
 const wss = new WebSocket.Server({ server });
 const adminEmail = 'imhoggbox@gmail.com';
-const onlineUsers = new Map();
+const onlineUsers = new Map(); // { userId: { ws, email, latitude, longitude, timestamp } }
 
 wss.on('connection', (ws, req) => {
   console.log('Client connected');
@@ -88,15 +88,17 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
+      console.log('Server received:', data);
 
-      // Stronger WebSocket Authentication
+      // WebSocket Authentication
       if (!ws.userId || !ws.email) {
         if (data.type === 'auth' && data.userId && data.email && data.token) {
           const decoded = jwt.verify(data.token, process.env.JWT_SECRET || 'your-secret-key');
           if (decoded.id === data.userId && decoded.email === data.email) {
             ws.userId = data.userId;
             ws.email = data.email;
-            console.log(`WebSocket authenticated: ${ws.email}, ${ws.userId}`);
+            ws.isAdmin = data.email === adminEmail;
+            console.log(`WebSocket authenticated: ${ws.email}, ${ws.userId}, Admin: ${ws.isAdmin}`);
           } else {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid authentication' }));
             ws.close();
@@ -122,32 +124,24 @@ wss.on('connection', (ws, req) => {
         );
         onlineUsers.set(userId, { ws, email, latitude, longitude, timestamp: new Date() });
 
-        wss.clients.forEach(async (client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            if (client.email === adminEmail) {
-              const allLocations = await Location.find();
-              client.send(
-                JSON.stringify({
-                  type: 'allLocations',
-                  locations: allLocations.map((loc) => ({
-                    userId: loc.userId,
-                    email: loc.email,
-                    latitude: loc.location.coordinates[1],
-                    longitude: loc.location.coordinates[0],
-                  })),
-                })
-              );
-              const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
-                userId,
-                email: info.email,
-                latitude: info.latitude,
-                longitude: info.longitude,
-                timestamp: info.timestamp,
-              }));
-              client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
-            } else if (client.email === email && client.userId === userId) {
-              client.send(JSON.stringify({ type: 'location', userId, email, latitude, longitude }));
-            }
+        // Send to the user themselves (non-admins)
+        if (!ws.isAdmin && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'location', userId, email, latitude, longitude }));
+        }
+
+        // Send all locations to admins
+        wss.clients.forEach((client) => {
+          if (client.isAdmin && client.readyState === WebSocket.OPEN) {
+            const allLocations = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
+              userId,
+              email: info.email,
+              latitude: info.latitude,
+              longitude: info.longitude
+            }));
+            client.send(JSON.stringify({
+              type: 'allLocations',
+              locations: allLocations
+            }));
           }
         });
       } else if (data.type === 'chat') {
@@ -183,7 +177,6 @@ wss.on('connection', (ws, req) => {
             client.send(JSON.stringify({ type: 'newPin', pin: data.pin }));
           }
         });
-        // Send push notification
         const subscriptions = await PushSubscription.find();
         const payload = JSON.stringify({
           title: 'New Alert Posted!',
@@ -210,25 +203,22 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
-    console.log('Client disconnected');
-    for (const [userId, info] of onlineUsers) {
-      if (info.ws === ws) {
-        onlineUsers.delete(userId);
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN && client.email === adminEmail) {
-            const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
-              userId,
-              email: info.email,
-              latitude: info.latitude,
-              longitude: info.longitude,
-              timestamp: info.timestamp,
-            }));
-            client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
-          }
-        });
-        break;
+    console.log('Client disconnected:', ws.userId);
+    onlineUsers.delete(ws.userId);
+    wss.clients.forEach((client) => {
+      if (client.isAdmin && client.readyState === WebSocket.OPEN) {
+        const allLocations = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
+          userId,
+          email: info.email,
+          latitude: info.latitude,
+          longitude: info.longitude
+        }));
+        client.send(JSON.stringify({
+          type: 'allLocations',
+          locations: allLocations
+        }));
       }
-    }
+    });
   });
 });
 
