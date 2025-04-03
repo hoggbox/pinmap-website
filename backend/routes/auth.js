@@ -7,7 +7,6 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
-const { Pin } = require('../models/pin');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
@@ -62,18 +61,12 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
       sex: sex || undefined,
       location: location || undefined,
       profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
-      role: email === 'imhoggbox@gmail.com' ? 'admin' : 'user' // Default admin for you
     });
     await user.save();
-    const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '1h' }
-    );
-    res.status(201).json({ message: 'User registered successfully', token });
+    res.status(201).json({ message: 'User registered successfully', userId: user._id });
   } catch (err) {
     console.error('Register error:', err);
-    res.status(500).json({ message: 'Server error', error: err.message });
+    res.status(500).json({ message: 'Server error during registration', error: err.message });
   }
 });
 
@@ -98,7 +91,7 @@ router.post('/login', async (req, res) => {
     await user.save();
     const expiresIn = stayLoggedIn ? '30d' : '1h';
     const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
+      { id: user._id, email: user.email },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn }
     );
@@ -189,7 +182,7 @@ router.post('/message/:id', authMiddleware, async (req, res) => {
     await message.save();
     sender.activityLogs.push({ action: 'Sent private message', details: `To: ${recipient.email}` });
     await sender.save();
-    res.json({ message: 'Message sent' });
+    res.json({ message: 'Message sent', messageId: message._id });
   } catch (err) {
     console.error('Send message error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
@@ -255,7 +248,7 @@ router.post('/message/:messageId', authMiddleware, async (req, res) => {
       content: content.trim(),
     });
     await message.save();
-    res.json({ message: 'Reply sent' });
+    res.json({ message: 'Reply sent', messageId: message._id });
   } catch (err) {
     console.error('Reply message error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
@@ -299,7 +292,7 @@ router.post('/message/forward/:messageId', authMiddleware, async (req, res) => {
       content: originalMessage.content,
     });
     await message.save();
-    res.json({ message: 'Message forwarded' });
+    res.json({ message: 'Message forwarded', messageId: message._id });
   } catch (err) {
     console.error('Forward message error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
@@ -442,29 +435,6 @@ router.get('/ip-ban-history', authMiddleware, adminMiddleware, async (req, res) 
     res.json(bans);
   } catch (err) {
     console.error('Fetch IP ban history error:', err);
-    res.status(500).json({ message: 'Server error', error: err.message });
-  }
-});
-
-// User Stats
-router.get('/stats', authMiddleware, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select('-password');
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    const pins = await Pin.find({ userId: req.user.id });
-    const verifications = await Pin.countDocuments({ verifications: req.user.id });
-    const stats = {
-      totalPins: user.totalPins,
-      reputation: user.reputation,
-      upvotes: user.upvotes,
-      downvotes: user.downvotes,
-      verifications,
-      joinDate: user.joinDate,
-      badges: user.badges
-    };
-    res.json(stats);
-  } catch (err) {
-    console.error('Stats error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
