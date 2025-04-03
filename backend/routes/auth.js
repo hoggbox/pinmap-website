@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
+const { Pin } = require('../models/pin');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
@@ -61,10 +62,11 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
       sex: sex || undefined,
       location: location || undefined,
       profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
+      role: email === 'imhoggbox@gmail.com' ? 'admin' : 'user' // Default admin for you
     });
     await user.save();
     const token = jwt.sign(
-      { id: user._id, email: user.email },
+      { id: user._id, email: user.email, role: user.role },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '1h' }
     );
@@ -96,7 +98,7 @@ router.post('/login', async (req, res) => {
     await user.save();
     const expiresIn = stayLoggedIn ? '30d' : '1h';
     const token = jwt.sign(
-      { id: user._id, email: user.email },
+      { id: user._id, email: user.email, role: user.role },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn }
     );
@@ -440,6 +442,29 @@ router.get('/ip-ban-history', authMiddleware, adminMiddleware, async (req, res) 
     res.json(bans);
   } catch (err) {
     console.error('Fetch IP ban history error:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// User Stats
+router.get('/stats', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const pins = await Pin.find({ userId: req.user.id });
+    const verifications = await Pin.countDocuments({ verifications: req.user.id });
+    const stats = {
+      totalPins: user.totalPins,
+      reputation: user.reputation,
+      upvotes: user.upvotes,
+      downvotes: user.downvotes,
+      verifications,
+      joinDate: user.joinDate,
+      badges: user.badges
+    };
+    res.json(stats);
+  } catch (err) {
+    console.error('Stats error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
