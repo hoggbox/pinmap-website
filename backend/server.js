@@ -42,7 +42,7 @@ const connectDB = async () => {
     console.log('MongoDB connected:', mongoose.connection.name);
   } catch (err) {
     console.error('MongoDB connection error:', err);
-    setTimeout(connectDB, 5000); // Retry after 5 seconds
+    setTimeout(connectDB, 5000);
   }
 };
 connectDB();
@@ -69,9 +69,9 @@ const PushSubscription = mongoose.model('PushSubscription', subscriptionSchema);
 
 // Web Push Setup
 webpush.setVapidDetails(
-  'mailto:your-email@example.com', // Replace with your email
-  process.env.VAPID_PUBLIC_KEY || 'YOUR_PUBLIC_VAPID_KEY', // Ensure in .env
-  process.env.VAPID_PRIVATE_KEY || 'YOUR_PRIVATE_VAPID_KEY' // Ensure in .env
+  'mailto:your-email@example.com',
+  process.env.VAPID_PUBLIC_KEY || 'YOUR_PUBLIC_VAPID_KEY',
+  process.env.VAPID_PRIVATE_KEY || 'YOUR_PRIVATE_VAPID_KEY'
 );
 
 // WebSocket Server
@@ -80,7 +80,7 @@ const server = app.listen(process.env.PORT || 5000, () =>
 );
 const wss = new WebSocket.Server({ server });
 const adminEmail = 'imhoggbox@gmail.com';
-const onlineUsers = new Map(); // { userId: { ws, email, latitude, longitude, timestamp } }
+const onlineUsers = new Map();
 
 wss.on('connection', (ws, req) => {
   console.log('Client connected');
@@ -113,19 +113,26 @@ wss.on('connection', (ws, req) => {
       if (data.type === 'location') {
         const { userId, email, latitude, longitude } = data;
         if (!latitude || !longitude) throw new Error('Missing coordinates');
+        const locData = {
+          latitude: parseFloat(latitude),
+          longitude: parseFloat(longitude),
+          email,
+          ws,
+          timestamp: new Date()
+        };
+        onlineUsers.set(userId, locData);
         await Location.findOneAndUpdate(
           { userId },
           {
             email,
-            location: { type: 'Point', coordinates: [parseFloat(longitude), parseFloat(latitude)] },
-            timestamp: new Date(),
+            location: { type: 'Point', coordinates: [locData.longitude, locData.latitude] },
+            timestamp: locData.timestamp
           },
           { upsert: true, new: true }
         );
-        onlineUsers.set(userId, { ws, email, latitude, longitude, timestamp: new Date() });
 
-        // Send to the user themselves (non-admins)
-        if (!ws.isAdmin && ws.readyState === WebSocket.OPEN) {
+        // Send to the user themselves
+        if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'location', userId, email, latitude, longitude }));
         }
 
