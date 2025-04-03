@@ -11,7 +11,6 @@ const User = require('./models/user');
 const Message = require('./models/message');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
-const webPush = require('web-push');
 
 dotenv.config();
 const app = express();
@@ -21,13 +20,6 @@ const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
-
-// Push Notification Setup
-webPush.setVapidDetails(
-  'mailto:imhoggbox@gmail.com',
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
 
 // Middleware
 app.use(cors({
@@ -49,7 +41,7 @@ const connectDB = async () => {
     console.log('MongoDB connected:', mongoose.connection.name);
   } catch (err) {
     console.error('MongoDB connection error:', err);
-    setTimeout(connectDB, 5000);
+    setTimeout(connectDB, 5000); // Retry after 5 seconds
   }
 };
 connectDB();
@@ -67,9 +59,6 @@ const locationSchema = new mongoose.Schema({
 locationSchema.index({ location: '2dsphere' });
 const Location = mongoose.model('Location', locationSchema);
 
-// Subscription storage (in-memory for now, use DB in prod)
-const subscriptions = new Map();
-
 // WebSocket Server
 const server = app.listen(process.env.PORT || 5000, () =>
   console.log(`Server running on port ${process.env.PORT || 5000}`)
@@ -85,6 +74,7 @@ wss.on('connection', (ws, req) => {
     try {
       const data = JSON.parse(message);
 
+      // Stronger WebSocket Authentication
       if (!ws.userId || !ws.email) {
         if (data.type === 'auth' && data.userId && data.email && data.token) {
           const decoded = jwt.verify(data.token, process.env.JWT_SECRET || 'your-secret-key');
@@ -92,8 +82,6 @@ wss.on('connection', (ws, req) => {
             ws.userId = data.userId;
             ws.email = data.email;
             console.log(`WebSocket authenticated: ${ws.email}, ${ws.userId}`);
-            onlineUsers.set(ws.userId, { ws, email: ws.email, latitude: null, longitude: null, timestamp: new Date() });
-            broadcastOnlineUsers();
           } else {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid authentication' }));
             ws.close();
@@ -118,7 +106,6 @@ wss.on('connection', (ws, req) => {
           { upsert: true, new: true }
         );
         onlineUsers.set(userId, { ws, email, latitude, longitude, timestamp: new Date() });
-        broadcastOnlineUsers();
 
         wss.clients.forEach(async (client) => {
           if (client.readyState === WebSocket.OPEN) {
@@ -135,6 +122,14 @@ wss.on('connection', (ws, req) => {
                   })),
                 })
               );
+              const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
+                userId,
+                email: info.email,
+                latitude: info.latitude,
+                longitude: info.longitude,
+                timestamp: info.timestamp,
+              }));
+              client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
             } else if (client.email === email && client.userId === userId) {
               client.send(JSON.stringify({ type: 'location', userId, email, latitude, longitude }));
             }
@@ -143,11 +138,21 @@ wss.on('connection', (ws, req) => {
       } else if (data.type === 'chat') {
         const { userId, username, message } = data;
         if (!message.trim()) throw new Error('Message cannot be empty');
-        const user = await User.findById(userId);
-        if (user.mutedUntil && new Date() < user.mutedUntil) throw new Error('User is muted');
         const chatMessage = new Chat({ userId, username, message });
         await chatMessage.save();
-        broadcastChatMessage(chatMessage);
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(
+              JSON.stringify({
+                type: 'chat',
+                userId,
+                username,
+                message,
+                timestamp: chatMessage.timestamp,
+              })
+            );
+          }
+        });
       } else if (data.type === 'privateMessage') {
         const { senderId, recipientId, content } = data;
         if (!content.trim()) throw new Error('Message content cannot be empty');
@@ -157,37 +162,18 @@ wss.on('connection', (ws, req) => {
         if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
           recipientWs.send(JSON.stringify({ type: 'privateMessage', senderId, recipientId, content }));
         }
-        sendPushNotification(recipientId, `New message from ${username || senderId}`);
       } else if (data.type === 'newPin') {
-        const { pin } = data;
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'newPin', pin }));
-            sendPushNotification(client.userId, `New pin: ${pin.description}`);
+            client.send(JSON.stringify({ type: 'newPin', pin: data.pin }));
           }
         });
       } else if (data.type === 'newComment') {
-        const { pinId } = data;
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'newComment', pinId }));
+            client.send(JSON.stringify({ type: 'newComment', pinId: data.pinId }));
           }
         });
-      } else if (data.type === 'muteUser') {
-        const { targetId, duration } = data;
-        const user = await User.findById(ws.userId);
-        if (user.role !== 'admin' && user.role !== 'moderator') throw new Error('Unauthorized');
-        const target = await User.findById(targetId);
-        if (!target) throw new Error('User not found');
-        target.mutedUntil = new Date(Date.now() + duration * 60 * 1000);
-        await target.save();
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN && client.userId === targetId) {
-            client.send(JSON.stringify({ type: 'muted', duration }));
-          }
-        });
-      } else if (data.type === 'subscribe') {
-        subscriptions.set(ws.userId, data.subscription);
       }
     } catch (err) {
       console.error('WebSocket message error:', err);
@@ -200,59 +186,23 @@ wss.on('connection', (ws, req) => {
     for (const [userId, info] of onlineUsers) {
       if (info.ws === ws) {
         onlineUsers.delete(userId);
-        subscriptions.delete(userId);
-        broadcastOnlineUsers();
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN && client.email === adminEmail) {
+            const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
+              userId,
+              email: info.email,
+              latitude: info.latitude,
+              longitude: info.longitude,
+              timestamp: info.timestamp,
+            }));
+            client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
+          }
+        });
         break;
       }
     }
   });
 });
-
-function broadcastOnlineUsers() {
-  const onlineUsersData = Array.from(onlineUsers.entries()).map(([userId, info]) => ({
-    userId,
-    email: info.email,
-    latitude: info.latitude,
-    longitude: info.longitude,
-    timestamp: info.timestamp,
-  }));
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN && client.email === adminEmail) {
-      client.send(JSON.stringify({ type: 'onlineUsers', users: onlineUsersData }));
-    }
-  });
-}
-
-function broadcastChatMessage(chatMessage) {
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(
-        JSON.stringify({
-          type: 'chat',
-          userId: chatMessage.userId,
-          username: chatMessage.username,
-          message: chatMessage.message,
-          timestamp: chatMessage.timestamp,
-        })
-      );
-    }
-  });
-}
-
-async function sendPushNotification(userId, message) {
-  const subscription = subscriptions.get(userId);
-  if (subscription) {
-    try {
-      await webPush.sendNotification(subscription, JSON.stringify({
-        title: 'Milledgeville Alert',
-        body: message,
-        icon: '/icon.png'
-      }));
-    } catch (err) {
-      console.error('Push notification error:', err);
-    }
-  }
-}
 
 // Admin Analytics Endpoint
 const { Pin } = require('./models/pin');
@@ -289,27 +239,4 @@ app.get('/admin/analytics', authenticateToken, async (req, res) => {
 // Health Check Endpoint for Render
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy' });
-});
-
-// Fetch all chat messages
-app.get('/chat', authenticateToken, async (req, res) => {
-  try {
-    const chats = await Chat.find().sort({ timestamp: -1 }).limit(50);
-    res.json(chats);
-  } catch (err) {
-    console.error('Error fetching chat messages:', err);
-    res.status(500).json({ message: 'Server error fetching chat messages' });
-  }
-});
-
-// Push subscription endpoint
-app.post('/subscribe', authenticateToken, async (req, res) => {
-  const subscription = req.body;
-  subscriptions.set(req.user.id, subscription);
-  res.status(201).json({ message: 'Subscription saved' });
-});
-
-// VAPID public key endpoint
-app.get('/vapidPublicKey', (req, res) => {
-  res.send(process.env.VAPID_PUBLIC_KEY);
 });
