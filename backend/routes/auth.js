@@ -63,7 +63,12 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
       profilePicture: req.file ? `/uploads/${req.file.filename}` : undefined,
     });
     await user.save();
-    res.status(201).json({ message: 'User registered successfully' });
+    const token = jwt.sign(
+      { id: user._id, email: user.email },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '1h' }
+    );
+    res.status(201).json({ message: 'User registered successfully', token });
   } catch (err) {
     console.error('Register error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
