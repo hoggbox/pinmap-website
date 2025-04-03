@@ -8,9 +8,9 @@ const messageSchema = new mongoose.Schema({
 });
 
 const activityLogSchema = new mongoose.Schema({
-  action: { type: String, required: true }, // e.g., "Posted pin", "Upvoted pin"
+  action: { type: String, required: true },
   timestamp: { type: Date, default: Date.now },
-  details: { type: String } // Optional additional info
+  details: { type: String }
 });
 
 const userSchema = new mongoose.Schema({
@@ -32,9 +32,11 @@ const userSchema = new mongoose.Schema({
   currentLatitude: { type: Number },
   currentLongitude: { type: Number },
   totalPins: { type: Number, default: 0 },
-  badges: [{ type: String }], // e.g., "10_Pins", "5_Verifications", "30_Days_Active"
-  messages: [messageSchema], // Private messages
-  activityLogs: [activityLogSchema] // User activity logs
+  badges: [{ type: String }],
+  messages: [messageSchema],
+  activityLogs: [activityLogSchema],
+  role: { type: String, default: 'user', enum: ['user', 'moderator', 'admin'] }, // New role field
+  mutedUntil: { type: Date, default: null } // For chat moderation
 });
 
 module.exports = mongoose.model('User', userSchema);
