@@ -13,7 +13,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const filetypes = /jpeg|jpg|png|gif/;
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
@@ -24,7 +24,7 @@ const upload = multer({
 });
 
 function getDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Earth's radius in meters
+  const R = 6371000;
   const toRad = (deg) => deg * Math.PI / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
@@ -37,7 +37,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
 async function removeExpiredPins() {
   try {
     const now = new Date();
-    await Pin.deleteMany({ expiresAt: { $lt: now }, pinType: 'alert' }); // Only remove alert pins
+    await Pin.deleteMany({ expiresAt: { $lt: now }, pinType: 'alert' });
     console.log('Expired alert pins removed');
   } catch (err) {
     console.error('Error removing expired pins:', err);
@@ -73,8 +73,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Admin-only business pins
-    const isAdmin = req.user.email === 'imhoggbox@gmail.com'; // Your admin email
+    const isAdmin = req.user.email === 'imhoggbox@gmail.com';
     const finalPinType = pinType || 'alert';
     if (finalPinType === 'business' && !isAdmin) {
       return res.status(403).json({ message: 'Business pins are admin-only' });
@@ -101,6 +100,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
       pinType: finalPinType,
     });
     await pin.save();
+    console.log('Saved pin with pinType:', pin.pinType); // Debug: Confirm pinType
 
     user.totalPins += 1;
     user.activityLogs.push({ action: `Posted ${finalPinType} pin`, details: pin._id.toString() });
