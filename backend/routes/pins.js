@@ -37,8 +37,8 @@ function getDistance(lat1, lon1, lat2, lon2) {
 async function removeExpiredPins() {
   try {
     const now = new Date();
-    await Pin.deleteMany({ expiresAt: { $lt: now } });
-    console.log('Expired pins removed');
+    await Pin.deleteMany({ expiresAt: { $lt: now }, pinType: 'alert' }); // Only remove alert pins
+    console.log('Expired alert pins removed');
   } catch (err) {
     console.error('Error removing expired pins:', err);
   }
@@ -65,13 +65,20 @@ router.get('/', authenticate, async (req, res) => {
 // Add a pin
 router.post('/', authenticate, upload.single('media'), async (req, res) => {
   try {
-    const { latitude, longitude, description, expiresAt } = req.body;
+    const { latitude, longitude, description, expiresAt, pinType } = req.body;
     if (!latitude || !longitude || !description) {
       return res.status(400).json({ message: 'Latitude, longitude, and description are required' });
     }
     const media = req.file ? `/uploads/${req.file.filename}` : null;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Admin-only business pins
+    const isAdmin = req.user.email === 'imhoggbox@gmail.com'; // Your admin email
+    const finalPinType = pinType || 'alert';
+    if (finalPinType === 'business' && !isAdmin) {
+      return res.status(403).json({ message: 'Business pins are admin-only' });
+    }
 
     const pins = await Pin.find();
     const tooClosePin = pins.find(pin => getDistance(parseFloat(latitude), parseFloat(longitude), pin.latitude, pin.longitude) < 304.8);
@@ -90,12 +97,13 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
       longitude: parseFloat(longitude),
       description: description.trim(),
       media,
-      expiresAt: expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000),
+      expiresAt: finalPinType === 'business' ? null : (expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000)),
+      pinType: finalPinType,
     });
     await pin.save();
 
     user.totalPins += 1;
-    user.activityLogs.push({ action: 'Posted pin', details: pin._id.toString() });
+    user.activityLogs.push({ action: `Posted ${finalPinType} pin`, details: pin._id.toString() });
     if (user.totalPins >= 10 && !user.badges.includes('10_Pins')) {
       user.badges.push('10_Pins');
     }
