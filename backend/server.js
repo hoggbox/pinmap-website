@@ -4,7 +4,8 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const pinRoutes = require('./routes/pins');
-const subscribeRoutes = require('./routes/subscribe'); // Add this
+const subscribeRoutes = require('./routes/subscribe');
+const trafficCameraRoutes = require('./routes/trafficCameras'); // Add this
 const path = require('path');
 const WebSocket = require('ws');
 const Chat = require('./models/chat');
@@ -32,7 +33,8 @@ app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 app.use('/auth', authRoutes);
 app.use('/pins', pinRoutes);
-app.use('/subscribe', subscribeRoutes); // Add this
+app.use('/subscribe', subscribeRoutes);
+app.use('/traffic-cameras', trafficCameraRoutes); // Add this
 
 // MongoDB Connection with Reconnection Logic
 const connectDB = async () => {
@@ -64,7 +66,7 @@ const Location = mongoose.model('Location', locationSchema);
 
 // Web Push Setup with VAPID Keys
 webpush.setVapidDetails(
-  'mailto:your-email@example.com', // Replace with your email
+  'mailto:your-email@example.com',
   'BIEBvt54qcb86fNJ9akRzuzzgvgY5Vi0hzvqSflNatlzIjVR6Clz02wY0by5vANRrLljbJoLR1uyRroK3Up21NM',
   'dv8PfZg9uwMlJvhUKV8LdkFIUhiF0GWHabCNuvB-ijo'
 );
