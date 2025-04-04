@@ -23,6 +23,17 @@ const upload = multer({
   },
 });
 
+function getDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000; // Earth's radius in meters
+  const toRad = (deg) => deg * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 async function removeExpiredPins() {
   try {
     const now = new Date();
@@ -61,6 +72,15 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     const media = req.file ? `/uploads/${req.file.filename}` : null;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const pins = await Pin.find();
+    const tooClosePin = pins.find(pin => getDistance(parseFloat(latitude), parseFloat(longitude), pin.latitude, pin.longitude) < 304.8);
+    if (tooClosePin) {
+      return res.status(400).json({
+        message: 'Alert cannot be within 1000 feet of an existing alert',
+        closestPin: { latitude: tooClosePin.latitude, longitude: tooClosePin.longitude }
+      });
+    }
 
     const pin = new Pin({
       userId: req.user.id,
