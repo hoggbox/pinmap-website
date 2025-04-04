@@ -3,9 +3,18 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const { Pin, Comment } = require('../models/pin');
 const User = require('../models/user');
+const Subscription = require('../models/subscription'); // Add this
 const authenticate = require('../middleware/authenticate');
 const multer = require('multer');
 const path = require('path');
+const webPush = require('web-push'); // Add this
+
+// Set VAPID details (same as in server.js)
+webPush.setVapidDetails(
+  'mailto:your-email@example.com', // Replace with your email
+  'BIEBvt54qcb86fNJ9akRzuzzgvgY5Vi0hzvqSflNatlzIjVR6Clz02wY0by5vANRrLljbJoLR1uyRroK3Up21NM',
+  'dv8PfZg9uwMlJvhUKV8LdkFIUhiF0GWHabCNuvB-ijo'
+);
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
@@ -100,7 +109,7 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
       pinType: finalPinType,
     });
     await pin.save();
-    console.log('Saved pin with pinType:', pin.pinType); // Debug: Confirm pinType
+    console.log('Saved pin with pinType:', pin.pinType);
 
     user.totalPins += 1;
     user.activityLogs.push({ action: `Posted ${finalPinType} pin`, details: pin._id.toString() });
@@ -108,6 +117,22 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
       user.badges.push('10_Pins');
     }
     await user.save();
+
+    // Send push notification to all subscribed users
+    const subscriptions = await Subscription.find();
+    const payload = JSON.stringify({
+      title: 'New Pin Added!',
+      body: `A new ${pin.pinType} pin was added: ${pin.description}`,
+      icon: '/path/to/icon.png' // Replace with your app's icon
+    });
+
+    for (const subscription of subscriptions) {
+      try {
+        await webPush.sendNotification(subscription, payload);
+      } catch (err) {
+        console.error('Error sending push notification:', err);
+      }
+    }
 
     const populatedPin = await Pin.findById(pin._id).populate('userId', 'email username location');
     res.status(201).json(populatedPin);
