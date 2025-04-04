@@ -5,9 +5,9 @@ const commentSchema = new mongoose.Schema({
   username: { type: String, required: true },
   content: { type: String, required: true },
   timestamp: { type: Date, default: Date.now },
-  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Users who liked
-  dislikes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Users who disliked
-  replies: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }] // Nested replies
+  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  dislikes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  replies: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }]
 });
 
 const pinSchema = new mongoose.Schema({
@@ -24,10 +24,10 @@ const pinSchema = new mongoose.Schema({
   voters: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   verifications: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   verified: { type: Boolean, default: false },
-  comments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }] // Reference comments instead of embedding
+  comments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }],
+  pinType: { type: String, enum: ['alert', 'business'], default: 'alert' } // Added this
 });
 
-// Define Comment model separately
 const Comment = mongoose.model('Comment', commentSchema);
 const Pin = mongoose.model('Pin', pinSchema);
 
