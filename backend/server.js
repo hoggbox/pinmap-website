@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const pinRoutes = require('./routes/pins');
+const subscribeRoutes = require('./routes/subscribe'); // Add this
 const path = require('path');
 const WebSocket = require('ws');
 const Chat = require('./models/chat');
@@ -31,6 +32,7 @@ app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 app.use('/auth', authRoutes);
 app.use('/pins', pinRoutes);
+app.use('/subscribe', subscribeRoutes); // Add this
 
 // MongoDB Connection with Reconnection Logic
 const connectDB = async () => {
@@ -60,18 +62,11 @@ const locationSchema = new mongoose.Schema({
 locationSchema.index({ location: '2dsphere' });
 const Location = mongoose.model('Location', locationSchema);
 
-// Push Subscription Schema
-const subscriptionSchema = new mongoose.Schema({
-  userId: String,
-  subscription: Object,
-});
-const PushSubscription = mongoose.model('PushSubscription', subscriptionSchema);
-
-// Web Push Setup
+// Web Push Setup with VAPID Keys
 webpush.setVapidDetails(
-  'mailto:your-email@example.com',
-  process.env.VAPID_PUBLIC_KEY || 'YOUR_PUBLIC_VAPID_KEY',
-  process.env.VAPID_PRIVATE_KEY || 'YOUR_PRIVATE_VAPID_KEY'
+  'mailto:your-email@example.com', // Replace with your email
+  'BIEBvt54qcb86fNJ9akRzuzzgvgY5Vi0hzvqSflNatlzIjVR6Clz02wY0by5vANRrLljbJoLR1uyRroK3Up21NM',
+  'dv8PfZg9uwMlJvhUKV8LdkFIUhiF0GWHabCNuvB-ijo'
 );
 
 // WebSocket Server
@@ -184,18 +179,6 @@ wss.on('connection', (ws, req) => {
             client.send(JSON.stringify({ type: 'newPin', pin: data.pin }));
           }
         });
-        const subscriptions = await PushSubscription.find();
-        const payload = JSON.stringify({
-          title: 'New Alert Posted!',
-          body: `A new alert has been posted: ${data.pin.description}`,
-        });
-        subscriptions.forEach(async (sub) => {
-          try {
-            await webpush.sendNotification(sub.subscription, payload);
-          } catch (err) {
-            console.error('Push notification error:', err);
-          }
-        });
       } else if (data.type === 'newComment') {
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
@@ -264,20 +247,4 @@ app.get('/admin/analytics', authenticateToken, async (req, res) => {
 // Health Check Endpoint for Render
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy' });
-});
-
-// Push Subscription Endpoint
-app.post('/subscribe', authenticateToken, async (req, res) => {
-  const subscription = req.body;
-  try {
-    await PushSubscription.findOneAndUpdate(
-      { userId: req.user.id },
-      { userId: req.user.id, subscription },
-      { upsert: true }
-    );
-    res.status(201).json({ message: 'Subscription saved' });
-  } catch (err) {
-    console.error('Subscription error:', err);
-    res.status(500).json({ message: 'Server error', error: err.message });
-  }
 });
