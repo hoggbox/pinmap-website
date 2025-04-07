@@ -185,7 +185,13 @@ router.post('/message/:id', authMiddleware, async (req, res) => {
   try {
     const recipient = await User.findById(req.params.id);
     if (!recipient) return res.status(404).json({ message: 'Recipient not found' });
+    
+    // Check if the sender is blocked by the recipient
     const sender = await User.findById(req.user.id);
+    if (recipient.blockedUsers.includes(req.user.id)) {
+      return res.status(403).json({ message: 'You are blocked by this user and cannot send messages to them' });
+    }
+
     const message = new Message({
       senderId: req.user.id,
       recipientId: req.params.id,
@@ -204,7 +210,10 @@ router.post('/message/:id', authMiddleware, async (req, res) => {
 // Get Inbox Messages
 router.get('/messages/inbox', authMiddleware, async (req, res) => {
   try {
-    const messages = await Message.find({ recipientId: req.user.id })
+    const messages = await Message.find({ 
+      recipientId: req.user.id,
+      deleted: false // Exclude deleted messages
+    })
       .populate('senderId', 'username email')
       .sort({ timestamp: -1 });
     res.json(messages);
@@ -217,13 +226,42 @@ router.get('/messages/inbox', authMiddleware, async (req, res) => {
 // Get Outbox Messages
 router.get('/messages/outbox', authMiddleware, async (req, res) => {
   try {
-    const messages = await Message.find({ senderId: req.user.id })
+    const messages = await Message.find({ 
+      senderId: req.user.id,
+      deleted: false // Exclude deleted messages
+    })
       .populate('recipientId', 'username email')
       .sort({ timestamp: -1 });
     res.json(messages);
   } catch (err) {
     console.error('Get outbox messages error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// Get Trash Messages
+router.get('/messages/trash', authMiddleware, async (req, res) => {
+  try {
+    const messages = await Message.find({ 
+      $or: [
+        { senderId: req.user.id },
+        { recipientId: req.user.id }
+      ],
+      deleted: true // Only include deleted messages
+    })
+      .populate('senderId', 'username email')
+      .populate('recipientId', 'username email')
+      .sort({ deletedAt: -1 });
+
+    // If no messages are found, return an empty array instead of an error
+    if (!messages || messages.length === 0) {
+      return res.json([]);
+    }
+
+    res.json(messages);
+  } catch (err) {
+    console.error('Get trash messages error:', err);
+    res.status(500).json({ message: 'Server error fetching trash messages', error: err.message });
   }
 });
 
@@ -254,6 +292,10 @@ router.post('/message/:messageId', authMiddleware, async (req, res) => {
     if (!originalMessage || originalMessage.recipientId.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
+    const recipient = await User.findById(originalMessage.senderId);
+    if (recipient.blockedUsers.includes(req.user.id)) {
+      return res.status(403).json({ message: 'You are blocked by this user and cannot send messages to them' });
+    }
     const message = new Message({
       senderId: req.user.id,
       recipientId: originalMessage.senderId,
@@ -267,7 +309,27 @@ router.post('/message/:messageId', authMiddleware, async (req, res) => {
   }
 });
 
-// Delete Message
+// Soft Delete Message (Move to Trash)
+router.put('/message/:messageId/delete', authMiddleware, async (req, res) => {
+  try {
+    const message = await Message.findById(req.params.messageId);
+    if (
+      !message ||
+      (message.recipientId.toString() !== req.user.id && message.senderId.toString() !== req.user.id)
+    ) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+    message.deleted = true;
+    message.deletedAt = new Date();
+    await message.save();
+    res.json({ message: 'Message moved to trash' });
+  } catch (err) {
+    console.error('Soft delete message error:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// Permanently Delete Message
 router.delete('/message/:messageId', authMiddleware, async (req, res) => {
   try {
     const message = await Message.findById(req.params.messageId);
@@ -277,10 +339,13 @@ router.delete('/message/:messageId', authMiddleware, async (req, res) => {
     ) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
+    if (!message.deleted) {
+      return res.status(400).json({ message: 'Message must be in trash to be permanently deleted' });
+    }
     await Message.deleteOne({ _id: req.params.messageId });
-    res.json({ message: 'Message deleted' });
+    res.json({ message: 'Message permanently deleted' });
   } catch (err) {
-    console.error('Delete message error:', err);
+    console.error('Permanently delete message error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
@@ -298,6 +363,9 @@ router.post('/message/forward/:messageId', authMiddleware, async (req, res) => {
     }
     const recipientUser = await User.findOne({ $or: [{ email: recipient }, { username: recipient }] });
     if (!recipientUser) return res.status(404).json({ message: 'Recipient not found' });
+    if (recipientUser.blockedUsers.includes(req.user.id)) {
+      return res.status(403).json({ message: 'You are blocked by this user and cannot send messages to them' });
+    }
     const message = new Message({
       senderId: req.user.id,
       recipientId: recipientUser._id,
@@ -307,6 +375,24 @@ router.post('/message/forward/:messageId', authMiddleware, async (req, res) => {
     res.json({ message: 'Message forwarded', messageId: message._id });
   } catch (err) {
     console.error('Forward message error:', err);
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// Block User
+router.post('/block/:id', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    const userToBlock = await User.findById(req.params.id);
+    if (!userToBlock) return res.status(404).json({ message: 'User not found' });
+    if (req.user.id === req.params.id) return res.status(400).json({ message: 'Cannot block yourself' });
+    if (!user.blockedUsers.includes(req.params.id)) {
+      user.blockedUsers.push(req.params.id);
+      await user.save();
+    }
+    res.json({ message: 'User blocked successfully' });
+  } catch (err) {
+    console.error('Block user error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
