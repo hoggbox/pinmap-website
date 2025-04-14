@@ -5,7 +5,7 @@ const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const pinRoutes = require('./routes/pins');
 const subscribeRoutes = require('./routes/subscribe');
-const trafficCameraRoutes = require('./routes/trafficCameras'); // Add this
+const trafficCameraRoutes = require('./routes/trafficCameras');
 const path = require('path');
 const WebSocket = require('ws');
 const Chat = require('./models/chat');
@@ -34,7 +34,7 @@ app.use('/uploads', express.static(uploadDir));
 app.use('/auth', authRoutes);
 app.use('/pins', pinRoutes);
 app.use('/subscribe', subscribeRoutes);
-app.use('/traffic-cameras', trafficCameraRoutes); // Add this
+app.use('/traffic-cameras', trafficCameraRoutes);
 
 // MongoDB Connection with Reconnection Logic
 const connectDB = async () => {
@@ -78,6 +78,7 @@ const server = app.listen(process.env.PORT || 5000, () =>
 const wss = new WebSocket.Server({ server });
 const adminEmail = 'imhoggbox@gmail.com';
 const onlineUsers = new Map();
+const notifiedPins = new Set(); // Track notified pins to prevent duplicates
 
 wss.on('connection', (ws, req) => {
   console.log('Client connected');
@@ -176,17 +177,37 @@ wss.on('connection', (ws, req) => {
           recipientWs.send(JSON.stringify({ type: 'privateMessage', senderId, recipientId, content }));
         }
       } else if (data.type === 'newPin') {
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'newPin', pin: data.pin }));
-          }
-        });
+        if (!notifiedPins.has(data.pin._id)) {
+          notifiedPins.add(data.pin._id);
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({ type: 'newPin', pin: data.pin }));
+            }
+          });
+        }
       } else if (data.type === 'newComment') {
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({ type: 'newComment', pinId: data.pinId }));
           }
         });
+      } else if (data.type === 'voiceAlert') {
+        const { userId, description, latitude, longitude } = data;
+        const pin = {
+          _id: new mongoose.Types.ObjectId().toString(),
+          userId,
+          latitude,
+          longitude,
+          description,
+          createdAt: new Date(),
+          pinType: 'alert'
+        };
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN && !notifiedPins.has(pin._id)) {
+            client.send(JSON.stringify({ type: 'newPin', pin }));
+          }
+        });
+        notifiedPins.add(pin._id);
       }
     } catch (err) {
       console.error('WebSocket message error:', err);
