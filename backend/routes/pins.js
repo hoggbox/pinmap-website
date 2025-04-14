@@ -3,15 +3,14 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const { Pin, Comment } = require('../models/pin');
 const User = require('../models/user');
-const Subscription = require('../models/subscription'); // Add this
+const Subscription = require('../models/subscription');
 const authenticate = require('../middleware/authenticate');
 const multer = require('multer');
 const path = require('path');
-const webPush = require('web-push'); // Add this
+const webPush = require('web-push');
 
-// Set VAPID details (same as in server.js)
 webPush.setVapidDetails(
-  'mailto:your-email@example.com', // Replace with your email
+  'mailto:your-email@example.com',
   'BIEBvt54qcb86fNJ9akRzuzzgvgY5Vi0hzvqSflNatlzIjVR6Clz02wY0by5vANRrLljbJoLR1uyRroK3Up21NM',
   'dv8PfZg9uwMlJvhUKV8LdkFIUhiF0GWHabCNuvB-ijo'
 );
@@ -74,10 +73,23 @@ router.get('/', authenticate, async (req, res) => {
 // Add a pin
 router.post('/', authenticate, upload.single('media'), async (req, res) => {
   try {
-    const { latitude, longitude, description, expiresAt, pinType } = req.body;
-    if (!latitude || !longitude || !description) {
-      return res.status(400).json({ message: 'Latitude, longitude, and description are required' });
+    let { latitude, longitude, description, expiresAt, pinType } = req.body;
+    
+    // If no coordinates provided, use user's current location
+    if (!latitude || !longitude) {
+      const user = await User.findById(req.user.id);
+      if (user.currentLatitude && user.currentLongitude) {
+        latitude = user.currentLatitude;
+        longitude = user.currentLongitude;
+      } else {
+        return res.status(400).json({ message: 'User location not available' });
+      }
     }
+
+    if (!description) {
+      return res.status(400).json({ message: 'Description is required' });
+    }
+
     const media = req.file ? `/uploads/${req.file.filename}` : null;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -118,12 +130,12 @@ router.post('/', authenticate, upload.single('media'), async (req, res) => {
     }
     await user.save();
 
-    // Send push notification to all subscribed users
+    // Send push notification only once
     const subscriptions = await Subscription.find();
     const payload = JSON.stringify({
       title: 'New Pin Added!',
       body: `A new ${pin.pinType} pin was added: ${pin.description}`,
-      icon: '/path/to/icon.png' // Replace with your app's icon
+      icon: '/path/to/icon.png'
     });
 
     for (const subscription of subscriptions) {
