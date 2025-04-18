@@ -1,14 +1,14 @@
 {
-    "name": "waze-like-backend",
-    "version": "1.0.0",
-    "scripts": {
-      "start": "node src/server.js"
-    },
-    "dependencies": {
-      "axios": "^0.27.2",
-      "cors": "^2.8.5",
-      "express": "^4.18.1",
-      "socket.io": "^4.5.1",
-      "web-push": "^3.5.0"
-    }
+  "name": "waze-like-backend",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^0.27.2",
+    "cors": "^2.8.5",
+    "express": "^4.18.1",
+    "socket.io": "^4.5.1",
+    "web-push": "^3.5.0"
   }
+}
